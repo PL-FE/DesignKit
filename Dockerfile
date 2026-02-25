@@ -60,7 +60,10 @@ WORKDIR /app
 
 # ---------- 安装 Python 依赖（利用 Docker 层缓存）----------
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -r requirements.txt
 
 # ---------- 复制应用代码 ----------
 COPY main.py .
