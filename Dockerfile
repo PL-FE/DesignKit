@@ -1,24 +1,24 @@
 # ============================================================
 # DesignKit CAD Converter API — Dockerfile
-# 基础镜像：Ubuntu 22.04 (ODA File Converter 官方支持)
+# 基础镜像：Ubuntu 22.04（满足 ODA GLIBC >= 2.28 要求）
 # ============================================================
 
 FROM ubuntu:22.04
 
-# ---------- 基本构建参数 ----------
+# ---------- 构建参数 ----------
 ARG DEBIAN_FRONTEND=noninteractive
-ARG ODA_DEB_URL=""
-# ODA File Converter .deb 包的下载地址，构建时通过 --build-arg 传入
-# 例如: docker build --build-arg ODA_DEB_URL=https://example.com/oda.deb .
-# 如果已将 .deb 文件放到项目根目录，也可以改用 COPY 方式（见下方注释）
+
+# 本地 ODA .deb 包路径（相对于项目根目录）
+ARG ODA_DEB_FILE=lib/ODAFileConverter_QT6_lnxX64_8.3dll_26.12.deb
 
 # ---------- 系统依赖 ----------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python 运行时
-    python3.11 \
-    python3.11-venv \
+    python3 \
     python3-pip \
-    # ODA File Converter 运行时依赖（Qt / OpenGL / 字体等）
+    # gdebi 用于自动解决 .deb 包的依赖
+    gdebi-core \
+    # ODA File Converter 运行时依赖（Qt6 / OpenGL / 字体等）
     libgl1-mesa-glx \
     libglib2.0-0 \
     libfontconfig1 \
@@ -27,28 +27,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libxkbcommon0 \
     libegl1 \
-    # 下载工具
+    libxcb-util1 \
+    # 工具
     curl \
-    wget \
-    # 清理缓存
     && rm -rf /var/lib/apt/lists/*
 
-# ---------- 安装 ODA File Converter ----------
-# 方式一（推荐）：通过构建参数下载官方 .deb 包安装
-# 请将 ODA_DEB_URL 替换为真实的下载地址（需要 ODA 授权）
-RUN if [ -n "$ODA_DEB_URL" ]; then \
-        wget -q "$ODA_DEB_URL" -O /tmp/oda_converter.deb && \
-        dpkg -i /tmp/oda_converter.deb || apt-get install -f -y && \
-        rm /tmp/oda_converter.deb; \
-    else \
-        echo "⚠️  未提供 ODA_DEB_URL，跳过 ODA File Converter 安装。"; \
-        echo "   请在运行时通过 ODA_CONVERTER_PATH 环境变量指定可执行文件路径。"; \
-    fi
+# ---------- 安装 ODA File Converter（本地 .deb）----------
+COPY ${ODA_DEB_FILE} /tmp/oda_converter.deb
 
-# 方式二（离线构建）：将 .deb 包放到项目根目录后取消下方注释并注释方式一
-# COPY ODAFileConverter_QT6_lnxX64_8.3.2.deb /tmp/oda_converter.deb
-# RUN dpkg -i /tmp/oda_converter.deb || apt-get install -f -y \
-#     && rm /tmp/oda_converter.deb
+# 检测是否已安装，没有则用 gdebi 安装
+# Ubuntu 22.04 额外需要 libxcb-util.so.0 软链接
+RUN if command -v ODAFileConverter > /dev/null 2>&1; then \
+        echo "✅ ODAFileConverter 已安装，跳过。"; \
+    else \
+        echo "🔧 正在安装 ODA File Converter ..." && \
+        gdebi --non-interactive /tmp/oda_converter.deb && \
+        echo "🔗 创建 libxcb-util.so.0 兼容软链接（Ubuntu 22.04 必需）..." && \
+        ln -sf /usr/lib/x86_64-linux-gnu/libxcb-util.so.1 \
+               /usr/lib/x86_64-linux-gnu/libxcb-util.so.0 && \
+        echo "✅ ODA File Converter 安装完成。"; \
+    fi \
+    # 安装完成后删除 .deb 包，减小镜像体积
+    && rm /tmp/oda_converter.deb
+
+# ---------- 验证安装结果 ----------
+RUN ODAFileConverter --version 2>/dev/null \
+    && echo "✅ ODAFileConverter 验证通过。" \
+    || echo "⚠️  ODAFileConverter 验证失败，请检查安装日志。"
 
 # ---------- 设置工作目录 ----------
 WORKDIR /app
@@ -64,9 +69,7 @@ COPY routers/ ./routers/
 COPY services/ ./services/
 
 # ---------- 环境变量 ----------
-# ODA File Converter 默认安装路径（Ubuntu .deb 通常为此路径）
 ENV ODA_CONVERTER_PATH=/usr/bin/ODAFileConverter
-# uvicorn 监听地址与端口
 ENV HOST=0.0.0.0
 ENV PORT=8000
 
@@ -74,8 +77,8 @@ ENV PORT=8000
 EXPOSE 8000
 
 # ---------- 健康检查 ----------
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/ || exit 1
 
 # ---------- 启动命令 ----------
 CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

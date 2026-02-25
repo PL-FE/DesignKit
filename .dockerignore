@@ -30,3 +30,6 @@ build/
 
 # 开发文档（不影响运行）
 README.md
+
+# 注意：lib/ 目录包含 ODA .deb 安装包，不能排除
+# lib/
