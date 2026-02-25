@@ -23,8 +23,8 @@ const handleChange: UploadProps['onChange'] = (uploadFile) => {
       return
     }
 
-    if (uploadFile.size && uploadFile.size > 100 * 1024 * 1024) {
-      ElMessage.warning('文件大小不能超过 100MB')
+    if (uploadFile.size && uploadFile.size > 1000 * 1024 * 1024) {
+      ElMessage.warning('文件大小不能超过 1000MB')
       uploadRef.value?.clearFiles()
       selectedFile.value = null
       return
@@ -108,7 +108,7 @@ const handleConvert = async () => {
                 class="text-gray-500 bg-gray-100/80 px-4 py-2 rounded-full text-sm inline-flex items-center gap-2"
               >
                 <Icon icon="solar:info-circle-linear" class="text-blue-500" />
-                最大支持 100MB 单个文件
+                最大支持 1000MB 单个文件
               </div>
             </div>
           </template>
