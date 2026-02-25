@@ -10,6 +10,8 @@ const converterStore = useConverterStore()
 const uploadRef = ref<UploadInstance>()
 const isConverting = ref(false)
 const selectedFile = ref<File | null>(null)
+const conversionProgress = ref(0)
+const progressStatusText = ref('')
 
 const handleChange: UploadProps['onChange'] = (uploadFile) => {
   if (uploadFile.raw) {
@@ -44,8 +46,18 @@ const handleConvert = async () => {
   }
 
   isConverting.value = true
+  conversionProgress.value = 0
+  progressStatusText.value = '正在拼装传输块...'
+
   try {
-    await convertCadFile(selectedFile.value, converterStore.preferredVersion)
+    await convertCadFile(
+      selectedFile.value,
+      converterStore.preferredVersion,
+      (progress, status) => {
+        conversionProgress.value = progress
+        if (status) progressStatusText.value = status
+      }
+    )
     ElMessage.success('转换成功！已开始下载')
     uploadRef.value?.clearFiles()
     selectedFile.value = null
@@ -53,6 +65,10 @@ const handleConvert = async () => {
     // 错误在 api 层已经通过 ElMessage 处理并抛出，此处无需再弹窗，只重置状态即可
   } finally {
     isConverting.value = false
+    setTimeout(() => {
+      conversionProgress.value = 0
+      progressStatusText.value = ''
+    }, 2000)
   }
 }
 </script>
@@ -173,12 +189,36 @@ const handleConvert = async () => {
               </p>
             </div>
           </div>
+          <!-- 进度条及处理状态展示 -->
           <div
-            v-else
-            class="bg-gray-50/70 rounded-2xl p-4 mb-8 border border-gray-200 border-dashed flex flex-col items-center justify-center text-gray-400 h-[88px] text-sm gap-1"
+            v-if="isConverting && conversionProgress !== undefined"
+            class="mb-6 px-1"
           >
-            <Icon icon="solar:document-add-linear" class="text-xl opacity-50" />
-            等待上传文件...
+            <div class="flex justify-between items-center mb-2">
+              <span
+                class="text-xs font-medium text-gray-600 flex items-center gap-1"
+              >
+                <Icon
+                  v-if="conversionProgress === 100"
+                  icon="solar:round-transfer-line-duotone"
+                  class="animate-spin text-blue-500"
+                />
+                {{ progressStatusText || '正在上传文件...' }}
+              </span>
+              <span
+                v-if="conversionProgress < 100"
+                class="text-xs font-bold text-blue-500"
+                >{{ conversionProgress }}%</span
+              >
+            </div>
+            <el-progress
+              v-if="conversionProgress < 100"
+              :percentage="conversionProgress"
+              :show-text="false"
+              :stroke-width="8"
+              class="w-full"
+              color="#3B82F6"
+            />
           </div>
 
           <el-button
