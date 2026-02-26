@@ -75,6 +75,8 @@ COPY services/ ./services/
 ENV ODA_CONVERTER_PATH=/usr/bin/ODAFileConverter
 ENV HOST=0.0.0.0
 ENV PORT=8000
+# 告知 Qt6 使用离屏渲染，无需 X11/Wayland 显示服务器（headless Docker 必需）
+ENV QT_QPA_PLATFORM=offscreen
 
 # ---------- 暴露端口 ----------
 EXPOSE 8000
