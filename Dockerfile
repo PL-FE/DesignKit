@@ -17,6 +17,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python 运行时
     python3 \
     python3-pip \
+    # ODAFileConverter 底层运行时依赖（AppImage 自包含 Qt，但不含这些系统级库）
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libfontconfig1 \
+    libx11-6 \
+    libxext6 \
+    libxrender1 \
+    libxkbcommon0 \
+    libegl1 \
+    libxcb-util1 \
+    # Xvfb：AppImage 内置 Qt 仅含 xcb 插件（无 offscreen），需虚拟 X11 显示
+    xvfb \
     # 健康检查工具
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -29,6 +41,9 @@ RUN chmod +x /tmp/ODAFileConverter.AppImage \
     && /tmp/ODAFileConverter.AppImage --appimage-extract \
     && mv squashfs-root /opt/ODAFileConverter \
     && rm /tmp/ODAFileConverter.AppImage \
+    # 打印目录结构，帮助确认可执行文件实际路径
+    && echo "📂 AppImage 内部结构：" \
+    && find /opt/ODAFileConverter -maxdepth 3 \( -name "ODA*" -o -name "AppRun" \) -type f \
     && echo "✅ ODA File Converter AppImage 解压完成"
 
 # ---------- 验证安装结果 ----------
@@ -53,11 +68,15 @@ COPY routers/ ./routers/
 COPY services/ ./services/
 
 # ---------- 环境变量 ----------
-ENV ODA_CONVERTER_PATH=/opt/ODAFileConverter/ODAFileConverter
+ENV ODA_CONVERTER_PATH=/opt/ODAFileConverter/usr/bin/ODAFileConverter
+# AppImage 解压后库文件在 usr/bin/，Qt 插件在 usr/plugins/
+ENV LD_LIBRARY_PATH=/opt/ODAFileConverter/usr/bin
+ENV QT_PLUGIN_PATH=/opt/ODAFileConverter/usr/plugins
+# AppImage 内置 Qt 只有 xcb 插件（无 offscreen），用 Xvfb 提供虚拟 X11
+ENV QT_QPA_PLATFORM=xcb
+ENV DISPLAY=:99
 ENV HOST=0.0.0.0
 ENV PORT=8000
-# AppImage 内置 Qt，使用离屏渲染，无需 X11/Xvfb 显示服务器
-ENV QT_QPA_PLATFORM=offscreen
 
 # ---------- 暴露端口 ----------
 EXPOSE 8000
@@ -67,4 +86,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${PORT}/ || exit 1
 
 # ---------- 启动命令 ----------
-CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# xvfb-run 自动启动虚拟 X11，ODA AppImage 的 xcb 插件可正常初始化
+CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1024x768x24",\
+     "python3", "-m", "uvicorn", "main:app",\
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
