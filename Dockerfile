@@ -1,6 +1,7 @@
 # ============================================================
 # DesignKit CAD Converter API — Dockerfile
 # 基础镜像：Ubuntu 22.04（满足 ODA GLIBC >= 2.28 要求）
+# 使用 AppImage 版本：自包含 Qt 运行时，无需任何图形环境依赖
 # ============================================================
 
 FROM ubuntu:22.04
@@ -8,50 +9,30 @@ FROM ubuntu:22.04
 # ---------- 构建参数 ----------
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 本地 ODA .deb 包路径（相对于项目根目录）
-ARG ODA_DEB_FILE=lib/ODAFileConverter_QT6_lnxX64_8.3dll_26.12.deb
+# 本地 ODA AppImage 路径（相对于项目根目录）
+ARG ODA_APPIMAGE=lib/ODAFileConverter_QT6_lnxX64_8.3dll_27.1.AppImage
 
-# ---------- 系统依赖 ----------
+# ---------- 系统依赖（最小化）----------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python 运行时
     python3 \
     python3-pip \
-    # gdebi 用于自动解决 .deb 包的依赖
-    gdebi-core \
-    # ODA File Converter 运行时依赖（Qt6 / OpenGL / 字体等）
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libfontconfig1 \
-    libx11-6 \
-    libxext6 \
-    libxrender1 \
-    libxkbcommon0 \
-    libegl1 \
-    libxcb-util1 \
-    # 工具
+    # 健康检查工具
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ---------- 安装 ODA File Converter（本地 .deb）----------
-COPY ${ODA_DEB_FILE} /tmp/oda_converter.deb
+# ---------- 安装 ODA File Converter（AppImage 解压方式，无需 FUSE）----------
+COPY ${ODA_APPIMAGE} /tmp/ODAFileConverter.AppImage
 
-# 检测是否已安装，没有则用 gdebi 安装
-# Ubuntu 22.04 额外需要 libxcb-util.so.0 软链接
-RUN if command -v ODAFileConverter > /dev/null 2>&1; then \
-        echo "✅ ODAFileConverter 已安装，跳过。"; \
-    else \
-        echo "🔧 正在安装 ODA File Converter ..." && \
-        gdebi --non-interactive /tmp/oda_converter.deb && \
-        echo "🔗 创建 libxcb-util.so.0 兼容软链接（Ubuntu 22.04 必需）..." && \
-        ln -sf /usr/lib/x86_64-linux-gnu/libxcb-util.so.1 \
-               /usr/lib/x86_64-linux-gnu/libxcb-util.so.0 && \
-        echo "✅ ODA File Converter 安装完成。"; \
-    fi \
-    # 安装完成后删除 .deb 包，减小镜像体积
-    && rm /tmp/oda_converter.deb
+RUN chmod +x /tmp/ODAFileConverter.AppImage \
+    # --appimage-extract：解压到 squashfs-root，完全绕过 FUSE 权限要求
+    && /tmp/ODAFileConverter.AppImage --appimage-extract \
+    && mv squashfs-root /opt/ODAFileConverter \
+    && rm /tmp/ODAFileConverter.AppImage \
+    && echo "✅ ODA File Converter AppImage 解压完成"
 
 # ---------- 验证安装结果 ----------
-RUN ODAFileConverter --version 2>/dev/null \
+RUN /opt/ODAFileConverter/ODAFileConverter --version 2>/dev/null \
     && echo "✅ ODAFileConverter 验证通过。" \
     || echo "⚠️  ODAFileConverter 验证失败，请检查安装日志。"
 
@@ -72,10 +53,10 @@ COPY routers/ ./routers/
 COPY services/ ./services/
 
 # ---------- 环境变量 ----------
-ENV ODA_CONVERTER_PATH=/usr/bin/ODAFileConverter
+ENV ODA_CONVERTER_PATH=/opt/ODAFileConverter/ODAFileConverter
 ENV HOST=0.0.0.0
 ENV PORT=8000
-# 告知 Qt6 使用离屏渲染，无需 X11/Wayland 显示服务器（headless Docker 必需）
+# AppImage 内置 Qt，使用离屏渲染，无需 X11/Xvfb 显示服务器
 ENV QT_QPA_PLATFORM=offscreen
 
 # ---------- 暴露端口 ----------
