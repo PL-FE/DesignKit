@@ -66,6 +66,8 @@ COPY main.py .
 COPY schemas.py .
 COPY routers/ ./routers/
 COPY services/ ./services/
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
 # ---------- 环境变量 ----------
 ENV ODA_CONVERTER_PATH=/opt/ODAFileConverter/usr/bin/ODAFileConverter
@@ -86,7 +88,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${PORT}/ || exit 1
 
 # ---------- 启动命令 ----------
-# xvfb-run 自动启动虚拟 X11，ODA AppImage 的 xcb 插件可正常初始化
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1024x768x24",\
-     "python3", "-m", "uvicorn", "main:app",\
-     "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# entrypoint.sh 先启动 Xvfb 虚拟 X11，再启动 uvicorn
+CMD ["/bin/bash", "entrypoint.sh"]

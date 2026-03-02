@@ -56,11 +56,13 @@ pip freeze > requirements.txt
 
 ## 🐳 Docker 环境独立测试
 
-如果你不想通过 python 环境在本地运行跑起来，且服务器环境含有能正常跑的 `docker-compose` 和对应配置了 ODA 环境容器：
-
 ```bash
-docker build -t designkit-backend .
-docker run -p 8000:8000 designkit-backend
-```
+# 先删除旧的
+docker stop designkit-container
+docker rm designkit-container
+docker rmi designkit:latest
 
-一般情况，直接回退一级目录使用项目根目录下的 `docker-compose up -d --build` 是最直观简单的组合运行手段。
+# 再构建新的
+docker build -t designkit:latest .
+docker run -d -p 8000:8000 --name designkit-container designkit:latest
+```
