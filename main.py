@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import converter, image
+from routers import converter, image, video_info, video_convert, video_compress, video_gif, video_edit
 
 app = FastAPI(
     title="DesignKit API",
@@ -20,6 +20,11 @@ app.add_middleware(
 # 注册路由
 app.include_router(converter.router, prefix="/api")
 app.include_router(image.router, prefix="/api")
+app.include_router(video_info.router, prefix="/api")
+app.include_router(video_convert.router, prefix="/api")
+app.include_router(video_compress.router, prefix="/api")
+app.include_router(video_gif.router, prefix="/api")
+app.include_router(video_edit.router, prefix="/api")
 
 @app.get("/")
 def read_root():

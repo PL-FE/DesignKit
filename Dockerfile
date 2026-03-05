@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-util1 \
     # Xvfb：AppImage 内置 Qt 仅含 xcb 插件（无 offscreen），需虚拟 X11 显示
     xvfb \
+    #音视频处理基础依赖
+    ffmpeg \
     # 健康检查工具
     curl \
     && rm -rf /var/lib/apt/lists/*

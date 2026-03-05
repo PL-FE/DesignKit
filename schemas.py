@@ -17,3 +17,35 @@ class ConvertResponse(BaseModel):
     status: str
     message: str
     file_path: str | None = None
+
+class MediaInfoResponse(BaseModel):
+    format: dict
+    streams: list[dict]
+
+class VideoFormat(str, Enum):
+    MP4 = "mp4"
+    MOV = "mov"
+    MKV = "mkv"
+    AVI = "avi"
+    FLV = "flv"
+    WEBM = "webm"
+    MP3 = "mp3"
+    AAC = "aac"
+    WAV = "wav"
+
+class CompressLevel(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+class GifFormat(str, Enum):
+    GIF = "gif"
+    WEBP = "webp"
+    JPG = "jpg"
+
+class VideoEditParams(BaseModel):
+    trim_start: str = "0"
+    trim_end: str = ""
+    crop: str = ""
+    remove_audio: bool = False
+    speed: float = 1.0
