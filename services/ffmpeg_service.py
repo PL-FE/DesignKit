@@ -157,13 +157,13 @@ async def make_gif(input_path: str, start_time: str, duration: str, fps: int, ou
         args.extend(["-t", duration])
         
     # 为了减少体积，动图通常我们需要限制最大宽度和 fps
-    # 宽度最大限制为 600px，高度自动按比例缩放，并配合 fps 控制
-    vf_str = f"fps={fps},scale=600:-1:flags=lanczos"
+    # 宽度最大限制为 480px（兼顾清晰和体积），高度自动按比例缩放，并配合 fps 控制
+    vf_str = f"fps={fps},scale=480:-1:flags=lanczos"
     
     if output_fmt == "gif":
-        # GIF 为了质量好一点，一般采用 split+palettegen+paletteuse 复杂的滤镜组合
-        # 简单高效起见，我们直接输出 GIF，并做 256 色优化处理
-        vf_str += ",split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
+        # GIF 为了缩减体积，采用定制滤镜：
+        # max_colors=128：减半色阶；bayer 抖动：增强压缩率和渐变表现
+        vf_str += ",split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
         args.extend(["-vf", vf_str, "-loop", "0"]) # 0=无限循环
         
     elif output_fmt == "webp":
