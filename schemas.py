@@ -49,3 +49,12 @@ class VideoEditParams(BaseModel):
     crop: str = ""
     remove_audio: bool = False
     speed: float = 1.0
+
+class LayoutMode(str, Enum):
+    GRID = "grid"
+    LEFT_HERO = "left_hero"
+    TOP_HERO = "top_hero"
+    MAGAZINE = "magazine"
+    MASONRY = "masonry"
+    NINE_GRID = "nine_grid" # 三宫格或九宫格
+
