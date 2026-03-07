@@ -57,4 +57,8 @@ class LayoutMode(str, Enum):
     MAGAZINE = "magazine"
     MASONRY = "masonry"
     NINE_GRID = "nine_grid" # 三宫格或九宫格
+    EQUAL_ROWS = "equal_rows" # 横向等分
+    EQUAL_COLS = "equal_cols" # 纵向等分
+    GALLERY_ROW = "gallery_row" # 横向画廊
+    GALLERY_COL = "gallery_col" # 纵向画廊
 

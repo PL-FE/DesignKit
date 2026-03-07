@@ -27,6 +27,7 @@ async def board_export(
     try:
         data = json.loads(layout_data)
         boxes = data.get("boxes", [])
+        texts = data.get("texts", [])
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"解析 layout_data 失败: {str(e)}")
 
@@ -37,12 +38,13 @@ async def board_export(
     for f in files:
         file_bytes_list.append(await f.read())
         
-    logger.info(f"[排版导出] 收到 {len(files)} 张图片, 尺寸={width}x{height}, 坐标数={len(boxes)}")
+    logger.info(f"[排版导出] 收到 {len(files)} 张图片, 尺寸={width}x{height}, 坐标数={len(boxes)}, 文本数={len(texts)}")
 
     try:
         psd_bytes = generate_psd_with_boxes(
             files=file_bytes_list, 
             boxes=boxes,
+            texts=texts,
             width=width,
             height=height,
             bg_color=bg_color,
