@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 import shutil
 import logging
+import os
 from pathlib import Path
 import json
 
@@ -223,3 +224,114 @@ async def edit_video(input_path: str, params: dict) -> str:
     args.extend(["-c:v", "libx264", "-preset", "fast", "-c:a", "aac"])
     
     return await execute_ffmpeg(input_path, args, ".mp4")
+
+async def separate_vocals(input_path: str) -> str:
+    """
+    使用 demucs 进行人声分离，提取伴奏
+    """
+    logger.info(f"[Demucs] 开始分离人声: {input_path}")
+    
+    # 再次尝试通过环境变量关闭 SSL（这会影响 torch.hub 的下载）
+    env = os.environ.copy()
+    env["PYTHONHTTPSVERIFY"] = "0"
+    env["CURL_CA_BUNDLE"] = ""
+    env["SSL_CERT_FILE"] = ""
+
+    # 创建输出目录
+    output_dir = tempfile.mkdtemp(prefix="demucs_out_")
+    
+    # 执行 demucs 命令
+    # 核心修复：通过 python -c 注入 SSL 绕过代码，确保子进程下载模型时跳过证书校验
+    # 使用 sys.argv 仿真命令行参数传递
+    python_cmd = (
+        "import ssl, sys; "
+        "ssl._create_default_https_context = ssl._create_unverified_context; "
+        "from demucs.separate import main; "
+        "sys.argv = ['demucs'] + sys.argv[1:]; "
+        "main()"
+    )
+    
+    args = [
+        "python3", "-c", python_cmd,
+        "-n", "htdemucs",
+        "--two-stems", "vocals",
+        "--mp3",
+        "-o", output_dir,
+        input_path
+    ]
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            err_output = stderr.decode()
+            logger.error(f"demucs 执行失败 (code {process.returncode}): {err_output}")
+            # 如果是因为缺少某些 ffmpeg 编码器导致 mp3 失败，尝试不加 --mp3 再跑一次（默认 wav）
+            if "not found" in err_output.lower() or "encoder" in err_output.lower():
+                logger.info("[Demucs] 尝试退回到 wav 模式重试...")
+                args.remove("--mp3")
+                process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await process.communicate()
+                if process.returncode != 0:
+                     raise RuntimeError(f"人声分离重试失败: {stderr.decode()}")
+            else:
+                raise RuntimeError(f"人声分离失败: {err_output}")
+            
+        # demucs 的输出路径通常是: output_dir/htdemucs/input_filename/no_vocals.mp3 (或 .wav)
+        input_filename_stem = Path(input_path).stem
+        # 递归查找结果文件，因为不同版本或不同模型的子目录可能略有差异
+        result_files = list(Path(output_dir).rglob("no_vocals.*"))
+        
+        if not result_files:
+            logger.error(f"Demucs 输出目录内容: {list(Path(output_dir).rglob('*'))}")
+            raise RuntimeError("人声分离成功完成，但未在输出目录找到结果文件")
+            
+        result_path = result_files[0]
+        ext = result_path.suffix
+                
+        # 复制到独立路径后立刻清理目录
+        temp_dest = tempfile.mktemp(suffix=ext)
+        shutil.copy2(result_path, temp_dest)
+        return temp_dest
+        
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+async def merge_audio(input_paths: list[str]) -> str:
+    """
+    音乐合并：支持调整顺序的合并
+    使用 ffmpeg concat 滤镜
+    """
+    if not input_paths:
+        raise ValueError("输入路径列表不能为空")
+        
+    if len(input_paths) == 1:
+        # 单个文件直接返回副本
+        temp_dest = tempfile.mktemp(suffix=Path(input_paths[0]).suffix)
+        shutil.copy2(input_paths[0], temp_dest)
+        return temp_dest
+
+    # 构建 ffmpeg 参数
+    args = []
+    for p in input_paths:
+        args.extend(["-i", p])
+    
+    # concat 滤镜: [0:a][1:a]...concat=n=N:v=0:a=1[outa]
+    filter_complex = "".join([f"[{i}:a]" for i in range(len(input_paths))])
+    filter_complex += f"concat=n={len(input_paths)}:v=0:a=1[outa]"
+    
+    args.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[outa]",
+        "-c:a", "libmp3lame", # 统一输出为 MP3
+        "-q:a", "2"
+    ])
+    
+    return await execute_ffmpeg("merge_audio", args, ".mp3")
