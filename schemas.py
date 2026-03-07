@@ -61,4 +61,8 @@ class LayoutMode(str, Enum):
     EQUAL_COLS = "equal_cols" # 纵向等分
     GALLERY_ROW = "gallery_row" # 横向画廊
     GALLERY_COL = "gallery_col" # 纵向画廊
+    CENTER_HERO = "center_hero" # 中心大图
+    SPAN_GRID = "span_grid" # 错落砖墙
+    CHECKERBOARD = "checkerboard" # 交替布局
+    GOLDEN_RATIO = "golden_ratio" # 黄金比例对折
 
