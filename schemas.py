@@ -65,4 +65,5 @@ class LayoutMode(str, Enum):
     SPAN_GRID = "span_grid" # 错落砖墙
     CHECKERBOARD = "checkerboard" # 交替布局
     GOLDEN_RATIO = "golden_ratio" # 黄金比例对折
+    CUSTOM_GRID = "custom_grid" # 自定义网格
 
