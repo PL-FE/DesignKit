@@ -59,14 +59,17 @@ WORKDIR /app
 # ---------- 安装 Python 依赖（分层安装以利用缓存）----------
 
 # 第一步：安装不会频繁变动的重型依赖 (torch 相关)
-# 这一层下过一次后，除非修改这一行，否则 Docker 永远会使用本地缓存，不再请求网络。
+# 🚨 强制安装 CPU 版本 (附加 --extra-index-url)，防止下载巨大的 NVIDIA CUDA 驱动库撑爆服务器磁盘
 RUN pip3 install --no-cache-dir \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn \
     torch==2.9.1 \
     torchaudio==2.9.1 \
     torchvision==0.24.1 \
-    demucs==4.0.1
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn
+        
+RUN pip3 install --no-cache-dir demucs==4.0.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
+
 
 # 第二步：预下载 Demucs AI 模型（关键：防止运行时重新下载）
 # 设置环境变量，指定模型存放路径，方便缓存
