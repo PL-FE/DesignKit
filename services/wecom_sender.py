@@ -5,9 +5,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-WECOM_CORP_ID: str = os.getenv("WECOM_CORP_ID", "")
-WECOM_AGENT_ID: str = os.getenv("WECOM_AGENT_ID", "")
-WECOM_SECRET: str = os.getenv("WECOM_SECRET", "")
+WECOM_CORP_ID: str = "ww6634803110ac8f64"
+WECOM_AGENT_ID: str = "1000006"
+WECOM_SECRET: str = "RNF8EQu52FGrdnCHwdU2xZDTC4-uS9DgSnSnr3sgXNI"
 
 WECOM_API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
 
