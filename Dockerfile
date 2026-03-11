@@ -56,7 +56,24 @@ RUN /opt/ODAFileConverter/ODAFileConverter --version 2>/dev/null \
 # ---------- 设置工作目录 ----------
 WORKDIR /app
 
-# ---------- 安装 Python 依赖（利用 Docker 层缓存）----------
+# ---------- 安装 Python 依赖（分层安装以利用缓存）----------
+
+# 第一步：安装不会频繁变动的重型依赖 (torch 相关)
+# 这一层下过一次后，除非修改这一行，否则 Docker 永远会使用本地缓存，不再请求网络。
+RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    torch==2.9.1 \
+    torchaudio==2.9.1 \
+    torchvision==0.24.1 \
+    demucs==4.0.1
+
+# 第二步：预下载 Demucs AI 模型（关键：防止运行时重新下载）
+# 设置环境变量，指定模型存放路径，方便缓存
+ENV TORCH_HOME=/app/.cache/torch
+RUN python3 -c "from demucs.apply import get_model; get_model('htdemucs')"
+
+# 第三步：安装业务常规依赖
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
