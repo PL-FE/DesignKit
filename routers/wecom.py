@@ -19,14 +19,15 @@ _crypto: WeChatCrypto | None = None
 def get_crypto() -> WeChatCrypto:
     global _crypto
     if _crypto is None:
-        token = os.getenv("WECOM_TOKEN", "")
-        aes_key = os.getenv("WECOM_AES_KEY", "")
-        corp_id = os.getenv("WECOM_CORP_ID", "")
+        # 硬编码企业微信配置
+        token = "kho0VKS3LxjhwXfNGvJ"
+        aes_key = "UX2JY05Sn49VV8QBgtpDYCD3asYeXSDpcsglpD49POl"
+        corp_id = "ww6634803110ac8f64"
         
         # 记录关键配置状态以便排查（不要打印明文密钥）
         if not token or not aes_key or not corp_id:
             logger.error(f"企业微信配置缺失！Token: {bool(token)}, AES_KEY: {bool(aes_key)}, CORP_ID: {bool(corp_id)}")
-            raise ValueError("企业微信机器人环境变量配置不完整，请检查 WECOM_TOKEN/WECOM_AES_KEY/WECOM_CORP_ID")
+            raise ValueError("企业微信机器人环境变量配置不完整")
 
         try:
             _crypto = WeChatCrypto(token.strip(), aes_key.strip(), corp_id.strip())
