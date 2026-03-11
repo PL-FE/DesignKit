@@ -74,7 +74,7 @@ RUN pip3 install --no-cache-dir demucs==4.0.1 -i https://pypi.tuna.tsinghua.edu.
 # 第二步：预下载 Demucs AI 模型（关键：防止运行时重新下载）
 # 设置环境变量，指定模型存放路径，方便缓存
 ENV TORCH_HOME=/app/.cache/torch
-RUN python3 -c "from demucs.apply import get_model; get_model('htdemucs')"
+RUN python3 -c "from demucs.pretrained import get_model; get_model('htdemucs')"
 
 # 第三步：安装业务常规依赖
 COPY requirements.txt .
