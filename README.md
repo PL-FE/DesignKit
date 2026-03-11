@@ -5,36 +5,27 @@
 ## ⚙️ 环境依赖与预置说明
 
 1. 需要 Python 3.10 或以上版本。
-2. **底层引擎要求**：请预先在您的服务器系统内安装 [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)。这个底层 C++ 工具才是转换得以运行的基础前提。默认尝试会使用系统变量预设 `ODA_CONVERTER_PATH`（未提供默认寻找当前环境变量对应的执行体）。
+2. **安装系统底层要求**
+**底层引擎要求**：请预先在您的系统内安装 [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)。这个底层 C++ 工具才是转换得以运行的基础前提。默认尝试会使用系统变量预设 `ODA_CONVERTER_PATH`（未提供默认寻找当前环境变量对应的执行体）。
 
 ## 🚀 本地开发启动说明
 
-进入在 `server` 根目录环境下执行：
+本项目使用 `uv` 作为依赖管理工具。请确保本地安装了 [uv](https://github.com/astral-sh/uv)。本地没有 Docker 环境也可正常运行，所有依赖均由 `uv` 统一管理。
 
-### 1. 创建并激活虚拟环境 (可选但是强烈推荐)
+### 1. 同步环境选项
+
+使用 `uv` 自动创建环境并同步依赖。
 
 ```bash
-# 创建名为 venv 的虚拟环境
-python3 -m venv venv
-
-# 激活环境 (Linux/MacOS)
-source venv/bin/activate
-# 激活环境 (Windows)
-# venv\Scripts\activate
+uv sync
 ```
 
-### 2. 安装 Python 依赖
+### 2. 运行本地开发服务器
+
+使用 `uv` 来运行热重载服务器。
 
 ```bash
-pip install -r requirements.txt
-```
-
-### 3. 运行本地开发服务器
-
-使用 `uvicorn` 热重载快速启动服务。
-
-```bash
-uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8000
 ```
 
 启动成功后，您可以在浏览器上访问本地文档来进行接口试验：
@@ -42,19 +33,19 @@ uvicorn main:app --reload --port 8000
 - API 交互文档 (Swagger UI): `http://127.0.0.1:8000/docs`
 - 备用静态文档 (ReDoc): `http://127.0.0.1:8000/redoc`
 
-## 📦 如何管理补充/冻结新的依赖？
+## 📦 如何管理新依赖？
 
-开发过程中，如果需要添加了新依赖（如执行了 `pip install requests`）：
+开发过程中，如果需要添加新依赖：
 
-请一定要随时更新依赖清单 `requirements.txt`：
+使用 `uv add` 来添加，添加后将自动更新 `pyproject.toml` 和 `uv.lock`。
 
 ```bash
-pip freeze > requirements.txt
+uv add requests
 ```
 
-> **注意：** FastAPI 由于生态较为松散集成度高，如果使用了其他附加插件（诸如 SQLAlchemy, SQLModel, Alembic），记得一并将其使用 `pip freeze` 进行固定，以防远端构建挂掉。
+> **注意：** 提交代码时，请带上更新后的 `pyproject.toml` 和 `uv.lock` 文件。
 
-## 🐳 Docker 环境独立测试
+## 🐳 Docker 部署 (可选)
 
 ```bash
 # 先删除旧的

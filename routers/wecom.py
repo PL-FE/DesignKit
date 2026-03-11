@@ -12,11 +12,6 @@ from services.wecom_sender import send_text_message
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# 从环境变量读取企微配置
-WECOM_TOKEN = os.getenv("WECOM_TOKEN", "")
-WECOM_AES_KEY = os.getenv("WECOM_AES_KEY", "")
-WECOM_CORP_ID = os.getenv("WECOM_CORP_ID", "")
-
 # 企微消息加解密实例（懒加载，避免配置未就绪时报错）
 _crypto: WeChatCrypto | None = None
 
@@ -24,7 +19,21 @@ _crypto: WeChatCrypto | None = None
 def get_crypto() -> WeChatCrypto:
     global _crypto
     if _crypto is None:
-        _crypto = WeChatCrypto(WECOM_TOKEN, WECOM_AES_KEY, WECOM_CORP_ID)
+        token = os.getenv("WECOM_TOKEN", "")
+        aes_key = os.getenv("WECOM_AES_KEY", "")
+        corp_id = os.getenv("WECOM_CORP_ID", "")
+        
+        # 记录关键配置状态以便排查（不要打印明文密钥）
+        if not token or not aes_key or not corp_id:
+            logger.error(f"企业微信配置缺失！Token: {bool(token)}, AES_KEY: {bool(aes_key)}, CORP_ID: {bool(corp_id)}")
+            raise ValueError("企业微信机器人环境变量配置不完整，请检查 WECOM_TOKEN/WECOM_AES_KEY/WECOM_CORP_ID")
+
+        try:
+            _crypto = WeChatCrypto(token.strip(), aes_key.strip(), corp_id.strip())
+        except AssertionError as e:
+            logger.error(f"企业微信 AES_KEY 配置格式不正确，期望 43 位字符，实际长度: {len(aes_key)}")
+            raise ValueError(f"WECOM_AES_KEY 格式错误: {e}")
+            
     return _crypto
 
 
