@@ -45,15 +45,90 @@ uv add requests
 
 > **注意：** 提交代码时，请带上更新后的 `pyproject.toml` 和 `uv.lock` 文件。
 
-## 🐳 Docker 部署 (可选)
+## 🐳 Docker 部署（推荐用于 DWG/DXF 转换）
+
+> `DWG/DXF → 低版本 DWG` 转换依赖 `ODA File Converter`，容器启动时会自动拉起 `Xvfb`。  
+> 为避免历史容器残留状态影响启动，**建议始终使用“删除旧容器后重建”的方式**，不要直接复用异常退出的旧容器。
+
+### 1）删除旧容器（如存在）
 
 ```bash
-# 先删除旧的
-docker stop designkit-container
-docker rm designkit-container
-docker rmi designkit:latest
-
-# 再构建新的
-docker build -t designkit:latest .
-docker run -d -p 8000:8000 --name designkit-container designkit:latest
+docker rm -f designkit-container 2>/dev/null || true
 ```
+
+### 2）构建镜像
+
+```bash
+docker build -t designkit:latest .
+```
+
+### 3）启动容器
+
+```bash
+docker run -d \
+  --name designkit-container \
+  -p 8000:8000 \
+  --restart unless-stopped \
+  designkit:latest
+```
+
+### 4）查看启动日志
+
+```bash
+docker logs -f designkit-container
+```
+
+正常情况下，日志中应看到类似输出：
+
+- `🖥️ 启动虚拟 X11 显示服务器 Xvfb...`
+- `✅ Xvfb 已启动`
+- `🚀 启动 FastAPI 服务...`
+
+### 5）验证服务是否正常
+
+```bash
+curl http://127.0.0.1:8000/
+```
+
+如果返回 HTTP 200，说明服务已成功启动。
+
+### 常用维护命令
+
+```bash
+# 停止容器
+docker stop designkit-container
+
+# 删除容器
+docker rm -f designkit-container
+
+# 重新构建并启动（推荐）
+docker rm -f designkit-container 2>/dev/null || true
+docker build -t designkit:latest .
+docker run -d --name designkit-container -p 8000:8000 --restart unless-stopped designkit:latest
+```
+
+### 常见问题
+
+#### 1. 出现 `Server is already active for display 99`
+
+这通常表示容器内 `Xvfb` 的历史锁状态未正确清理。  
+当前版本的启动脚本已自动处理该问题；如果你仍然遇到它，请不要直接 `docker start` 旧容器，而是执行：
+
+```bash
+docker rm -f designkit-container 2>/dev/null || true
+docker run -d --name designkit-container -p 8000:8000 --restart unless-stopped designkit:latest
+```
+
+#### 2. 容器启动了，但 DWG 转换失败
+
+请优先检查容器日志：
+
+```bash
+docker logs designkit-container
+```
+
+重点确认以下内容：
+
+- `ODA_CONVERTER_PATH` 是否存在且可执行
+- `Xvfb` 是否成功启动
+- `POST /api/convert` 调用时是否有 ODA 转换错误日志
