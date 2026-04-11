@@ -304,6 +304,292 @@ async def separate_vocals(input_path: str) -> str:
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
 
+def parse_lrc(lrc_content: str) -> list[dict]:
+    """
+    解析 LRC 格式歌词文件，返回时间戳和歌词对的列表。
+    支持标准格式：[mm:ss.xx] 歌词文字
+    返回: [{"time": float（秒）, "text": str}]
+    """
+    import re
+    lines = []
+    # 匹配标准 LRC 时间标签
+    time_pattern = re.compile(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\](.*)$')
+
+    for raw_line in lrc_content.splitlines():
+        raw_line = raw_line.strip()
+        # 同一行可能有多个时间标签（如 [00:01.00][00:30.00]歌词）
+        tags = re.findall(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\]', raw_line)
+        if not tags:
+            continue
+        # 提取歌词文本（最后一个时间标签后面的所有内容）
+        text = re.sub(r'\[\d{1,3}:\d{2}\.\d{1,3}\]', '', raw_line).strip()
+        if not text:
+            continue
+        for m, s, cs in tags:
+            minutes = int(m)
+            seconds = int(s)
+            centiseconds_str = cs.ljust(3, '0')[:3]  # 统一为3位毫秒
+            milliseconds = int(centiseconds_str)
+            total_seconds = minutes * 60 + seconds + milliseconds / 1000.0
+            lines.append({"time": total_seconds, "text": text})
+
+    # 按时间排序
+    lines.sort(key=lambda x: x["time"])
+    return lines
+
+
+def _seconds_to_ass_time(seconds: float) -> str:
+    """将浮点秒数转换为 ASS 字幕时间格式 H:MM:SS.cc"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    cs = int(round((seconds % 1) * 100))
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _lrc_to_ass(
+    lrc_lines: list[dict],
+    audio_duration: float,
+    font_name: str,
+    font_size: int,
+    font_color: str,
+    stroke_color: str,
+    stroke_width: int,
+    resolution: str,
+    letter_spacing: int = 2,
+    line_gap_ratio: float = 1.8,
+) -> str:
+    """
+    将解析后的 LRC 行列表转换为 ASS 字幕格式字符串。
+    三行滚动模式（带动画）：
+      - 上方行：淡色小字（前一句），淡入
+      - 中间行：正常颜色大字（当前句，居中），从下方滚入 + 淡入
+      - 下方行：淡色小字（后一句），淡入
+    font_color / stroke_color 格式为 "#rrggbb"
+    letter_spacing: 字符间额外间距（px），对应 ASS Spacing 字段
+    line_gap_ratio: 行间距倍数（相对于 font_size），默认 1.8
+    """
+    def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
+        """#RRGGBB → ASS &HAABBGGRR (AA=00 不透明, FF 完全透明)"""
+        h = hex_color.lstrip('#')
+        r, g, b = h[0:2], h[2:4], h[4:6]
+        return f"&H{alpha}{b}{g}{r}"
+
+    width, height = map(int, resolution.lower().split('x'))
+    cx = width // 2   # 水平居中 X
+    cy = height // 2  # 垂直居中 Y
+
+    # 正常颜色（当前行）
+    primary_color = hex_to_ass_color(font_color, "00")
+    outline_color = hex_to_ass_color(stroke_color, "00")
+
+    # 淡色（上下行），透明度约 52%（0x85）
+    dim_color = hex_to_ass_color(font_color, "85")
+    dim_outline = hex_to_ass_color(stroke_color, "85")
+
+    # 上下行字号为当前行的 68%，描边相应缩小
+    dim_size = max(36, int(font_size * 0.68))
+    dim_stroke = max(1, stroke_width - 1)
+    dim_spacing = max(0, letter_spacing - 1)
+
+    # 行间距（中间行中心 → 旁边行中心）
+    line_gap = int(font_size * line_gap_ratio)
+
+    # 动画参数（单位：毫秒），只用淡入淡出，不移动
+    anim_in_ms = 300    # 当前行淡入时长
+    fade_out_ms = 150   # 结束前淡出时长
+    dim_fade_ms = 250   # 上下行淡入时长
+
+    # ASS 文件头，定义两种 Style
+    # Spacing 字段控制字符间距；Alignment=5 垂直水平居中
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {width}
+PlayResY: {height}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{font_name},{font_size},{primary_color},&H000000FF,{outline_color},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
+Style: Dim,{font_name},{dim_size},{dim_color},&H000000FF,{dim_outline},&H80000000,0,0,0,0,100,100,{dim_spacing},0,1,{dim_stroke},2,5,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    def escape(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("{", "\\{")
+
+    events = []
+    for i, line in enumerate(lrc_lines):
+        start = line["time"]
+        # 结束时间为下一句开始前 0.05 秒，或音频总时长
+        if i + 1 < len(lrc_lines):
+            end = lrc_lines[i + 1]["time"] - 0.05
+        else:
+            end = audio_duration
+        # 最小显示 0.5 秒
+        if end <= start:
+            end = start + 0.5
+
+        s = _seconds_to_ass_time(start)
+        e = _seconds_to_ass_time(end)
+
+        curr_text = escape(line["text"])
+
+        # 当前行（中间，正常颜色，Layer=1）
+        # 纯淡入淡出旲动，无移动动画
+        curr_tag = (
+            f"{{\\an5"
+            f"\\pos({cx},{cy})"
+            f"\\fad({anim_in_ms},{fade_out_ms})"
+            f"}}"
+        )
+        events.append(
+            f"Dialogue: 1,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}"
+        )
+
+        # 上一行（当前行上方，淡色，Layer=0）
+        # 静止在上方位置，淡入显示（无需移动，是已显示的前一句）
+        if i > 0:
+            prev_text = escape(lrc_lines[i - 1]["text"])
+            prev_y = cy - line_gap
+            dim_tag = (
+                f"{{\\an5"
+                f"\\pos({cx},{prev_y})"
+                f"\\fad({dim_fade_ms},0)"
+                f"}}"
+            )
+            events.append(
+                f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{dim_tag}{prev_text}"
+            )
+
+        # 下一行（当前行下方，淡色，Layer=0）
+        # 静止在下方位置，淡入显示
+        if i + 1 < len(lrc_lines):
+            next_text = escape(lrc_lines[i + 1]["text"])
+            next_y = cy + line_gap
+            dim_tag = (
+                f"{{\\an5"
+                f"\\pos({cx},{next_y})"
+                f"\\fad({dim_fade_ms},0)"
+                f"}}"
+            )
+            events.append(
+                f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{dim_tag}{next_text}"
+            )
+
+    return header + "\n".join(events) + "\n"
+
+
+
+
+async def generate_lyric_video(
+    audio_path: str,
+    lrc_lines: list[dict],
+    bg_color: str,
+    font_size: int,
+    font_color: str,
+    stroke_color: str,
+    stroke_width: int,
+    resolution: str,
+    font_path: str,
+    letter_spacing: int = 2,
+    line_gap_ratio: float = 1.8,
+) -> str:
+    """
+    使用 FFmpeg 将音频和解析后的 LRC 歌词合成为带字幕的 MP4 视频。
+
+    流程：
+    1. 通过 ffprobe 获取音频时长
+    2. 将 lrc_lines 转换为 ASS 字幕文件（临时文件）
+    3. FFmpeg 生成纯色背景 + 叠加字幕 + 合并音频
+
+    返回临时输出 mp4 文件路径
+    """
+    logger.info(f"[歌词视频] 开始合成，音频: {audio_path}, 歌词行数: {len(lrc_lines)}, 分辨率: {resolution}")
+
+    # 1. 获取音频时长
+    probe_data = await execute_ffprobe(audio_path)
+    audio_duration = float(probe_data.get("format", {}).get("duration", 0))
+    if audio_duration <= 0:
+        raise RuntimeError("无法读取音频时长，请检查文件格式")
+    logger.info(f"[歌词视频] 音频时长: {audio_duration:.2f}s")
+
+    # 2. 提取字体名（FFmpeg ASS 滤镜需要字体名而非路径）
+    # 对于内嵌字体或已安装字体，只需提供 font name；
+    # 若直接指定字体文件路径，需要用 fontsdir 或 force_style
+    font_name = Path(font_path).stem  # e.g. "NotoSansSC-Bold"
+
+    # 3. 生成 ASS 字幕内容
+    ass_content = _lrc_to_ass(
+        lrc_lines=lrc_lines,
+        audio_duration=audio_duration,
+        font_name=font_name,
+        font_size=font_size,
+        font_color=font_color,
+        stroke_color=stroke_color,
+        stroke_width=stroke_width,
+        resolution=resolution,
+        letter_spacing=letter_spacing,
+        line_gap_ratio=line_gap_ratio,
+    )
+
+    # 4. 写入临时 ASS 文件
+    ass_file = tempfile.mktemp(suffix=".ass")
+    with open(ass_file, 'w', encoding='utf-8') as f:
+        f.write(ass_content)
+    logger.info(f"[歌词视频] 已生成 ASS 字幕: {ass_file}")
+
+    # 5. 解析分辨率
+    width, height = resolution.lower().split('x')
+
+    # 6. 处理背景颜色（#RRGGBB → FFmpeg color=0xRRGGBB）
+    bg_hex = bg_color.lstrip('#')
+    ffmpeg_bg_color = f"0x{bg_hex}"
+
+    try:
+        # 7. 构建 FFmpeg 命令
+        # 视频流：lavfi color 生成纯色背景，叠加 ASS 字幕
+        # 音频流：直接使用输入音频
+        # ASS 字幕中指定 fontsdir 以便 FFmpeg 找到自定义字体
+        fontsdir = str(Path(font_path).parent)
+
+        # ASS 路径在 Windows 需要转义冒号，Linux/Mac 直接用即可
+        escaped_ass = ass_file.replace('\\', '/').replace(':', '\\:')
+        escaped_fontsdir = fontsdir.replace('\\', '/').replace(':', '\\:')
+
+        vf = (
+            f"subtitles='{escaped_ass}':fontsdir='{escaped_fontsdir}'"
+        )
+
+        args = [
+            # 视频流：纯色背景
+            "-f", "lavfi",
+            "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=25",
+            # 音频流
+            "-i", audio_path,
+            # 时长与音频一致
+            "-t", str(audio_duration),
+            # 视频滤镜：叠加 ASS 字幕
+            "-vf", vf,
+            # 编码
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "192k",
+            # 映射：第一个输入的视频 + 第二个输入的音频
+            "-map", "0:v", "-map", "1:a",
+        ]
+
+        result_path = await execute_ffmpeg(audio_path, args, ".mp4")
+        logger.info(f"[歌词视频] 合成完成: {result_path}")
+        return result_path
+
+    finally:
+        # 清理临时 ASS 文件
+        if os.path.exists(ass_file):
+            os.remove(ass_file)
+
+
 async def merge_audio(input_paths: list[str]) -> str:
     """
     音乐合并：支持调整顺序的合并

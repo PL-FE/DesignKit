@@ -11,7 +11,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import converter, image, video_info, video_convert, video_compress, video_gif, video_edit, board_layout, audio
+from routers import converter, image, video_info, video_convert, video_compress, video_gif, video_edit, board_layout, audio, lyric_video
 
 app = FastAPI(
     title="DesignKit API",
@@ -38,6 +38,7 @@ app.include_router(video_gif.router, prefix="/api")
 app.include_router(video_edit.router, prefix="/api")
 app.include_router(board_layout.router, prefix="/api")
 app.include_router(audio.router, prefix="/api")
+app.include_router(lyric_video.router, prefix="/api")
 
 @app.get("/")
 def read_root():
