@@ -88,7 +88,14 @@ COPY main.py .
 COPY schemas.py .
 COPY routers/ ./routers/
 COPY services/ ./services/
+COPY assets/ ./assets/
 COPY entrypoint.sh .
+
+# 安装中文字体到系统目录以修复 FFmpeg 合成方块问题
+RUN mkdir -p /usr/share/fonts/truetype/noto \
+    && cp assets/fonts/NotoSansSC-Bold.otf /usr/share/fonts/truetype/noto/ \
+    && fc-cache -fv
+
 RUN chmod +x entrypoint.sh
 
 # ---------- 环境变量 ----------
