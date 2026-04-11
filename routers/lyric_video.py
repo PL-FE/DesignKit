@@ -27,11 +27,11 @@ _FONT_PATH = str(Path(__file__).parent.parent / "assets" / "fonts" / "NotoSansSC
 async def lyric_video_generate_endpoint(
     audio: UploadFile = File(..., description="音频文件（MP3/WAV/FLAC 等）"),
     lrc: UploadFile = File(..., description="LRC 格式歌词文件"),
-    bg_color: str = Form("#0a0a1a", description="背景颜色（#RRGGBB）"),
+    bg_color: str = Form("#000000", description="背景颜色（#RRGGBB）"),
     font_size: int = Form(150, description="字体大小（px），建议 80~200"),
     font_color: str = Form("#ffffff", description="歌词字体颜色（#RRGGBB）"),
     stroke_color: str = Form("#000000", description="描边颜色（#RRGGBB）"),
-    stroke_width: int = Form(4, description="描边宽度（1~8）"),
+    stroke_width: int = Form(0, description="描边宽度（1~8）"),
     resolution: str = Form("1280x720", description="视频分辨率，建议 1280x720 (720p) 以获得最佳性能，或 1920x1080 (1080p)"),
     remove_vocals: bool = Form(False, description="是否去除人声（使用 AI 伴奏提取，耗时较长）"),
     letter_spacing: int = Form(8, description="字符间距（px），对应 ASS Spacing，0~30"),
