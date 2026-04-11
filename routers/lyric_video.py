@@ -32,7 +32,7 @@ async def lyric_video_generate_endpoint(
     font_color: str = Form("#ffffff", description="歌词字体颜色（#RRGGBB）"),
     stroke_color: str = Form("#000000", description="描边颜色（#RRGGBB）"),
     stroke_width: int = Form(4, description="描边宽度（1~8）"),
-    resolution: str = Form("1920x1080", description="视频分辨率，如 1920x1080 / 1080x1920"),
+    resolution: str = Form("1280x720", description="视频分辨率，建议 1280x720 (720p) 以获得最佳性能，或 1920x1080 (1080p)"),
     remove_vocals: bool = Form(False, description="是否去除人声（使用 AI 伴奏提取，耗时较长）"),
     letter_spacing: int = Form(8, description="字符间距（px），对应 ASS Spacing，0~30"),
     line_gap_ratio: float = Form(1.5, description="行间距倍数（相对于 font_size），建议 1.2~3.0"),

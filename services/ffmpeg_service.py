@@ -41,13 +41,14 @@ async def execute_ffprobe(input_path: str) -> dict:
         logger.error("ffprobe 返回了无效的 JSON 格式")
         raise RuntimeError("媒体信息解析错误")
 
-async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str) -> str:
+async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str, timeout: int = 120) -> str:
     """
     异步调用 ffmpeg 外部命令行工具
-    
+
     :param input_path: 输入文件路径 (为了记录或日志)
     :param args: ffmpeg 后面的命令参数 (不包含"ffmpeg")，注意需要包含 -y 覆盖以及输出路径
     :param output_ext: 输出文件后缀，例如 ".mp4"
+    :param timeout: 超时时间（秒），默认 120 秒
     :return: 临时输出文件路径（调用方负责清理）
     """
     # 让 ffmpeg 将输出直接写在一个专属的临时目录中
@@ -66,8 +67,15 @@ async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str) -> s
             stderr=asyncio.subprocess.PIPE
         )
         
-        _, stderr = await process.communicate()
-        
+        try:
+            # 增加超时控制
+            _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            logger.error(f"ffmpeg 执行超时（超过 {timeout} 秒）: {input_path}")
+            raise RuntimeError(f"媒体处理超时（限时 {timeout} 秒）")
+
         if process.returncode != 0:
             err_msg = stderr.decode()
             logger.error(f"ffmpeg 执行失败: {err_msg}")
@@ -261,15 +269,15 @@ async def separate_vocals(input_path: str) -> str:
     ]
     
     try:
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env
-        )
-        
-        stdout, stderr = await process.communicate()
-        
+        try:
+            # 增加 120 秒超时控制
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            logger.error("demucs 执行超时（超过 120 秒）")
+            raise RuntimeError("人声分离超时（限时 120 秒），请尝试较短的音频")
+
         if process.returncode != 0:
             err_output = stderr.decode()
             logger.error(f"demucs 执行失败 (code {process.returncode}): {err_output}")
@@ -564,23 +572,26 @@ async def generate_lyric_video(
         )
 
         args = [
-            # 视频流：纯色背景
+            # 视频流：纯色背景，降低帧率到 20 以减轻 CPU 压力
             "-f", "lavfi",
-            "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=25",
+            "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=20",
             # 音频流
             "-i", audio_path,
             # 时长与音频一致
             "-t", str(audio_duration),
             # 视频滤镜：叠加 ASS 字幕
             "-vf", vf,
-            # 编码
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            # 编码策略优化：
+            # - ultrafast: 最低 CPU 占用，极速导出
+            # - tune stillimage: 针对静态背景调优
+            # - threads 2: 限制并发线程，适配核心数
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "2",
             "-c:a", "aac", "-b:a", "192k",
             # 映射：第一个输入的视频 + 第二个输入的音频
             "-map", "0:v", "-map", "1:a",
         ]
 
-        result_path = await execute_ffmpeg(audio_path, args, ".mp4")
+        result_path = await execute_ffmpeg(audio_path, args, ".mp4", timeout=120)
         logger.info(f"[歌词视频] 合成完成: {result_path}")
         return result_path
 
