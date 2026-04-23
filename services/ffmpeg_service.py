@@ -175,9 +175,9 @@ def _build_glow_background_source(width: str, height: str, ffmpeg_bg_color: str)
     return (
         f"color=c=0x{base}:size={width}x{height}:rate=20,"
         f"format=rgba,"
-        f"drawbox=x='W*0.18+sin(t*0.55)*W*0.12':y='H*0.20+cos(t*0.43)*H*0.10':w='W*0.30':h='H*0.30':color=0xff6b6b@0.20:t=fill,"
-        f"drawbox=x='W*0.56+cos(t*0.37)*W*0.11':y='H*0.22+sin(t*0.61)*H*0.10':w='W*0.24':h='H*0.24':color=0x7c4dff@0.18:t=fill,"
-        f"drawbox=x='W*0.34+cos(t*0.29)*W*0.14':y='H*0.58+sin(t*0.48)*H*0.10':w='W*0.34':h='H*0.34':color=0x4dd0e1@0.16:t=fill,"
+        f"drawbox=x='iw*0.18+sin(t*0.55)*iw*0.12':y='ih*0.20+cos(t*0.43)*ih*0.10':w='iw*0.30':h='ih*0.30':color=0xff6b6b@0.20:t=fill,"
+        f"drawbox=x='iw*0.56+cos(t*0.37)*iw*0.11':y='ih*0.22+sin(t*0.61)*ih*0.10':w='iw*0.24':h='ih*0.24':color=0x7c4dff@0.18:t=fill,"
+        f"drawbox=x='iw*0.34+cos(t*0.29)*iw*0.14':y='ih*0.58+sin(t*0.48)*ih*0.10':w='iw*0.34':h='ih*0.34':color=0x4dd0e1@0.16:t=fill,"
         f"gblur=sigma=70:steps=2,"
         f"format=yuv420p"
     )

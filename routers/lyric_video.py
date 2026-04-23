@@ -7,7 +7,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
@@ -35,6 +35,25 @@ _FONT_CANDIDATES = [
     Path("/usr/share/fonts/truetype/noto/NotoSansSC-Bold.otf"),
 ]
 _FONT_PATH = str(next((p for p in _FONT_CANDIDATES if p.exists()), _FONT_CANDIDATES[0]))
+
+
+def _lyric_video_download_response(task_id: str, task_info: object) -> FileResponse:
+    encoded_filename = urllib.parse.quote(task_info.result_filename)
+
+    def cleanup():
+        if task_info.result_path and os.path.exists(task_info.result_path):
+            os.remove(task_info.result_path)
+        remove_task(task_id)
+
+    return FileResponse(
+        path=task_info.result_path,
+        filename=task_info.result_filename,
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+        },
+        background=BackgroundTask(cleanup),
+    )
 
 
 async def _do_generate(
@@ -236,7 +255,6 @@ async def lyric_video_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
 
     if task_info.status == TaskStatus.DONE and task_info.result_path:
-        # 安全检查：文件必须存在且文件名有效
         if not task_info.result_filename or not os.path.exists(task_info.result_path):
             logger.error(
                 f"[歌词视频] 任务 {task_id} 状态为 DONE 但结果文件缺失: "
@@ -245,21 +263,28 @@ async def lyric_video_task_status(task_id: str):
             remove_task(task_id)
             raise HTTPException(status_code=410, detail="结果文件已过期或不存在，请重新生成")
 
-        encoded_filename = urllib.parse.quote(task_info.result_filename)
-
-        def cleanup():
-            if task_info.result_path and os.path.exists(task_info.result_path):
-                os.remove(task_info.result_path)
-            remove_task(task_id)
-
-        return FileResponse(
-            path=task_info.result_path,
-            filename=task_info.result_filename,
-            media_type="video/mp4",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            },
-            background=BackgroundTask(cleanup),
-        )
+        payload = task_info.to_dict()
+        payload["download_url"] = f"/lyric-video/task/{task_id}/download"
+        return JSONResponse(payload)
 
     return JSONResponse(task_info.to_dict())
+
+
+@router.get("/lyric-video/task/{task_id}/download")
+async def lyric_video_task_download(task_id: str, request: Request):
+    task_info = get_task(task_id)
+    if not task_info:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+
+    if task_info.status != TaskStatus.DONE or not task_info.result_path:
+        raise HTTPException(status_code=409, detail="结果文件尚未生成，请稍后重试")
+
+    if not task_info.result_filename or not os.path.exists(task_info.result_path):
+        logger.error(
+            f"[歌词视频] 下载失败，任务 {task_id} 结果文件缺失: "
+            f"path={task_info.result_path}, filename={task_info.result_filename}, client={request.client}"
+        )
+        remove_task(task_id)
+        raise HTTPException(status_code=410, detail="结果文件已过期或不存在，请重新生成")
+
+    return _lyric_video_download_response(task_id, task_info)
