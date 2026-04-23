@@ -29,8 +29,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 项目内置中文字体路径（思源黑体 Noto Sans SC Bold）
-_FONT_PATH = str(Path(__file__).parent.parent / "assets" / "fonts" / "NotoSansSC-Bold.otf")
+# 字体查找路径（按优先级）：项目 assets → 系统字体目录
+_FONT_CANDIDATES = [
+    Path(__file__).parent.parent / "assets" / "fonts" / "NotoSansSC-Bold.otf",
+    Path("/usr/share/fonts/truetype/noto/NotoSansSC-Bold.otf"),
+]
+_FONT_PATH = str(next((p for p in _FONT_CANDIDATES if p.exists()), _FONT_CANDIDATES[0]))
 
 
 async def _do_generate(
@@ -99,11 +103,15 @@ async def _do_generate(
         else:
             output_filename = f"{base_name}_lyrics_video.mp4"
 
-        task_info.status = TaskStatus.DONE
         task_info.progress = 100
         task_info.result_path = result_path
         task_info.result_filename = output_filename
         task_info.finished_at = __import__("time").time()
+        # status 必须最后设置：每次 __setattr__ 都会触发 _save_task，
+        # 如果先设 DONE 再设 result_path/result_filename，
+        # 轮询端可能在 status=DONE 但 result_filename=None 的窗口期
+        # 调用 urllib.parse.quote(None) 导致 TypeError → 500
+        task_info.status = TaskStatus.DONE
         logger.info(f"[歌词视频] 合成完成: {output_filename}")
 
     except Exception as e:
@@ -184,7 +192,8 @@ async def lyric_video_generate_endpoint(
         raise HTTPException(status_code=400, detail="LRC 文件解析失败或歌词为空，请检查文件格式")
     logger.info(f"[歌词视频] 解析到 {len(lrc_lines)} 行歌词")
 
-    # 3. 创建异步任务
+    # 3. 创建异步任务（顺带清理过期任务）
+    cleanup_old_tasks()
     task_info = create_task()
     logger.info(f"[歌词视频] 创建异步任务: {task_info.task_id}")
 
@@ -227,6 +236,15 @@ async def lyric_video_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
 
     if task_info.status == TaskStatus.DONE and task_info.result_path:
+        # 安全检查：文件必须存在且文件名有效
+        if not task_info.result_filename or not os.path.exists(task_info.result_path):
+            logger.error(
+                f"[歌词视频] 任务 {task_id} 状态为 DONE 但结果文件缺失: "
+                f"path={task_info.result_path}, filename={task_info.result_filename}"
+            )
+            remove_task(task_id)
+            raise HTTPException(status_code=410, detail="结果文件已过期或不存在，请重新生成")
+
         encoded_filename = urllib.parse.quote(task_info.result_filename)
 
         def cleanup():

@@ -83,20 +83,28 @@ RUN pip3 install --no-cache-dir \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r requirements.txt
 
+# ---------- 预装中文字体（独立层，不随业务代码变动而重建）----------
+COPY assets/fonts/NotoSansSC-Bold.otf /tmp/NotoSansSC-Bold.otf
+RUN mkdir -p /usr/share/fonts/truetype/noto \
+    && cp /tmp/NotoSansSC-Bold.otf /usr/share/fonts/truetype/noto/ \
+    && fc-cache -fv \
+    && rm /tmp/NotoSansSC-Bold.otf
+
 # ---------- 复制应用代码 ----------
 COPY main.py .
 COPY schemas.py .
 COPY routers/ ./routers/
 COPY services/ ./services/
-COPY assets/ ./assets/
 COPY entrypoint.sh .
 
-# 安装中文字体到系统目录以修复 FFmpeg 合成方块问题
-RUN mkdir -p /usr/share/fonts/truetype/noto \
-    && cp assets/fonts/NotoSansSC-Bold.otf /usr/share/fonts/truetype/noto/ \
-    && fc-cache -fv
+# 创建 assets 目录（运行时可通过 volume 挂载背景视频等资源）
+RUN mkdir -p assets/fonts
 
 RUN chmod +x entrypoint.sh
+
+# ---------- 运行时资源卷 ----------
+# 挂载此卷可提供背景视频（123.mp4）等资源，无需重新构建镜像
+VOLUME /app/assets
 
 # ---------- 环境变量 ----------
 ENV ODA_CONVERTER_PATH=/opt/ODAFileConverter/usr/bin/ODAFileConverter

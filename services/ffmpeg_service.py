@@ -11,7 +11,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-_LYRIC_BG_VIDEO_PATH = Path(__file__).parent.parent / "assets" / "123.mp4"
+_LYRIC_BG_VIDEO_PATH = Path("/app/assets/123.mp4") if Path("/app/assets/123.mp4").exists() else Path(__file__).parent.parent / "assets" / "123.mp4"
 _LYRIC_BG_IMAGE_URL = "https://picsum.photos/200/300"
 _LYRIC_BG_IMAGE_INTERVAL = 10
 
@@ -766,7 +766,13 @@ async def generate_lyric_video(
             use_bg_image = False
 
     try:
-        fontsdir = str(Path(font_path).parent)
+        # fontsdir：优先使用字体文件所在目录；若字体不在磁盘（如 volume 未挂载），回退系统字体目录
+        font_file = Path(font_path)
+        if font_file.exists():
+            fontsdir = str(font_file.parent)
+        else:
+            _sys_font_dir = "/usr/share/fonts/truetype/noto"
+            fontsdir = _sys_font_dir if Path(_sys_font_dir).exists() else str(font_file.parent)
 
         escaped_ass = ass_file.replace('\\', '/').replace(':', '\\:')
         escaped_fontsdir = fontsdir.replace('\\', '/').replace(':', '\\:')
