@@ -22,6 +22,7 @@ _DB_PATH = str(Path(__file__).parent.parent / "task_store.db")
 def _init_db() -> sqlite3.Connection:
     """创建数据库连接并初始化表结构。"""
     conn = sqlite3.connect(_DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("""
