@@ -379,58 +379,56 @@ def _lrc_to_ass(
     audio_duration: float,
     font_name: str,
     font_size: int,
-    font_color: str,
+    sung_color: str,
+    unsung_color: str,
     stroke_color: str,
     stroke_width: int,
     resolution: str,
-    letter_spacing: int = 2,
-    line_gap_ratio: float = 1.8,
+    letter_spacing: int = 0,
+    line_gap_ratio: float = 1.5,
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
 ) -> str:
     """
-    将解析后的 LRC 行列表转换为 ASS 字幕格式字符串。
-    三行滚动模式（带动画）：
-      - 上方行：淡色小字（前一句），淡入
-      - 中间行：正常颜色大字（当前句，居中），从下方滚入 + 淡入
-      - 下方行：淡色小字（后一句），淡入
-    font_color / stroke_color 格式为 "#rrggbb"
-    letter_spacing: 字符间额外间距（px），对应 ASS Spacing 字段
-    line_gap_ratio: 行间距倍数（相对于 font_size），默认 1.8
+    将 LRC 歌词转换为 ASS 字幕，实现卡拉 OK 逐字变色效果。
+
+    三行滚动模式：
+      - 上一行（上方）：已唱完，显示已唱颜色，全行同时变色
+      - 当前行（中间）：卡拉 OK 效果，未唱→已唱逐字变色
+      - 下一行（下方）：未唱，显示未唱颜色（更淡）
     """
     def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
-        """#RRGGBB → ASS &HAABBGGRR (AA=00 不透明, FF 完全透明)"""
+        """#RRGGBB → ASS &HAABBGGRR"""
         h = hex_color.lstrip('#')
         r, g, b = h[0:2], h[2:4], h[4:6]
         return f"&H{alpha}{b}{g}{r}"
 
     width, height = map(int, resolution.lower().split('x'))
-    cx = width // 2   # 水平居中 X
-    cy = height // 2  # 垂直居中 Y
+    cx = width // 2
+    cy = height // 2
 
-    # 正常颜色（当前行）
-    primary_color = hex_to_ass_color(font_color, "00")
-    outline_color = hex_to_ass_color(stroke_color, "00")
+    # ASS 颜色值（ASS格式：&HAABBGGRR，alpha=00表示完全不透明）
+    sung_ass   = hex_to_ass_color(sung_color,   "00")  # 已唱颜色（红色）
+    unsung_ass = hex_to_ass_color(unsung_color, "00")  # 未唱颜色（白色）
+    outline_ass = hex_to_ass_color(stroke_color, "00")  # 描边颜色
 
-    # 淡色（上下行），透明度约 52%（0x85）
-    dim_color = hex_to_ass_color(font_color, "85")
-    dim_outline = hex_to_ass_color(stroke_color, "85")
+    # 上下行使用灰色（#aaaaaa），表示次要信息
+    gray_ass = hex_to_ass_color("#aaaaaa", "00")
+    dim_outline_ass = hex_to_ass_color(stroke_color, "00")
 
-    # 上下行字号为当前行的 68%，描边相应缩小
+    # 上下行字号为当前行的 68%
     dim_size = max(36, int(font_size * 0.68))
     dim_stroke = max(1, stroke_width - 1)
-    dim_spacing = max(0, letter_spacing - 1)
 
-    # 行间距（中间行中心 → 旁边行中心）
+    # 行间距
     line_gap = int(font_size * line_gap_ratio)
 
-    # 动画参数（单位：毫秒），只用淡入淡出，不移动
-    anim_in_ms = 300    # 当前行淡入时长
-    fade_out_ms = 150   # 结束前淡出时长
-    dim_fade_ms = 250   # 上下行淡入时长
+    # 淡入淡出时长（毫秒）
+    anim_in_ms = 300
+    fade_out_ms = 150
+    dim_fade_ms = 250
 
-    # ASS 文件头，定义两种 Style
-    # Spacing 字段控制字符间距；Alignment=5 垂直水平居中
+    # ASS 基础样式（Default 用于当前行卡拉 OK，Dim 用于上下行）
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -439,106 +437,111 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary_color},&H000000FF,{outline_color},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
-Style: Dim,{font_name},{dim_size},{dim_color},&H000000FF,{dim_outline},&H80000000,0,0,0,0,100,100,{dim_spacing},0,1,{dim_stroke},2,5,0,0,0,1
+Style: Default,{font_name},{font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
+Style: Dim,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
+Style: Prev,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    def escape_and_wrap(text: str, is_dim: bool = False) -> str:
-        # 计算每行最大字符数
-        if wrap_mode == "chars":
-            # 手动指定模式：直接使用用户设定的字符数
-            limit = max_chars_per_line
-        else:
-            # 自动模式：根据视频宽度、字号和间距计算
-            # CJK 字符宽度约等于字号，加上 Spacing 间距
-            f_size = dim_size if is_dim else font_size
-            spacing = dim_spacing if is_dim else letter_spacing
-            # 每字符占 (f_size * 1.0 + spacing) 像素宽度
-            # 留出左右各 3% 边距，可用宽度为 94%
-            usable_width = width * 0.94
-            limit = max(5, int(usable_width / (f_size + spacing)))
-        
-        if len(text) > limit:
-            chunks = [text[i:i+limit] for i in range(0, len(text), limit)]
-            text = "\\N".join(chunks)
-            
-        return text.replace("\\", "\\\\").replace("{", "\\{").replace("\\\\N", "\\N")
+    def escape(text: str) -> str:
+        """转义 ASS 特殊字符"""
+        return text.replace("\\", "\\\\").replace("{", "\\{")
 
-    events = []
-    # 插入 1 帧标题封面（使用总歌词第一行），不修改原歌词时间轴
+    def wrap_text(text: str, limit: int) -> list[str]:
+        """按字符数换行，返回行列表"""
+        if len(text) <= limit:
+            return [text]
+        return [text[i:i+limit] for i in range(0, len(text), limit)]
+
+    def calc_chars_per_line(f_size: int) -> int:
+        """根据字号和视频宽度计算每行字符数"""
+        if wrap_mode == "chars":
+            return max_chars_per_line
+        usable_width = width * 0.94
+        return max(5, int(usable_width / f_size))
+
+    def build_karaoke_text(text: str, line_duration: float) -> str:
+        """
+        构建卡拉 OK 逐字变色文本。
+        ASS 卡拉OK语法: \\kf{时长} 实现从左到右填充效果。
+        PrimaryColour 为已唱颜色，SecondaryColour 为未唱颜色。
+        """
+        limit = calc_chars_per_line(font_size)
+        chunks = wrap_text(text, limit)
+        total_chars = sum(len(c) for c in chunks)
+
+        if total_chars == 0:
+            return escape(text)
+
+        total_cs = int(round(line_duration * 100))
+        per_char_cs = max(1, total_cs // total_chars)
+
+        lines: list[str] = []
+        for chunk in chunks:
+            segment = ""
+            for ch in chunk:
+                # \\kf 从左到右填充效果（而不是 \\k 整字变色）
+                segment += f"{{\\kf{per_char_cs}}}{escape(ch)}"
+            lines.append(segment)
+
+        return "\\N".join(lines)
+
+    def build_prev_text(text: str) -> str:
+        """上一行：已唱颜色（使用 Prev 样式）"""
+        limit = calc_chars_per_line(dim_size)
+        chunks = wrap_text(text, limit)
+        result = "\\N".join([escape(c) for c in chunks])
+        return result
+
+    def build_next_text(text: str) -> str:
+        """下一行：淡色未唱（使用 Dim 样式）"""
+        limit = calc_chars_per_line(dim_size)
+        chunks = wrap_text(text, limit)
+        result = "\\N".join([escape(c) for c in chunks])
+        return result
+
+    events: list[str] = []
+
+    # 封面帧（第一行歌词，快速闪过）
     if lrc_lines and lrc_lines[0]["text"]:
         cover_start = _seconds_to_ass_time(0.0)
-        cover_end = _seconds_to_ass_time(0.05)  # 20fps 下约 1 帧
-        cover_text = escape_and_wrap(lrc_lines[0]["text"], is_dim=False)
-        cover_tag = f"{{\\an5\\pos({cx},{cy})\\fad(0,0)}}"
-        events.append(
-            f"Dialogue: 2,{cover_start},{cover_end},Default,,0,0,0,,{cover_tag}{cover_text}"
-        )
+        cover_end   = _seconds_to_ass_time(0.05)
+        cover_text  = build_karaoke_text(lrc_lines[0]["text"], 0.05)
+        cover_tag   = f"{{\\an5\\pos({cx},{cy})\\fad(0,0)}}"
+        events.append(f"Dialogue: 3,{cover_start},{cover_end},Default,,0,0,0,,{cover_tag}{cover_text}")
 
+    # 主体歌词行
     for i, line in enumerate(lrc_lines):
         start = line["time"]
-        # 结束时间为下一句开始前 0.05 秒，或音频总时长
-        if i + 1 < len(lrc_lines):
-            end = lrc_lines[i + 1]["time"] - 0.05
-        else:
-            end = audio_duration
-        # 最小显示 0.5 秒
+        end = lrc_lines[i + 1]["time"] - 0.05 if i + 1 < len(lrc_lines) else audio_duration
         if end <= start:
             end = start + 0.5
+        line_duration = end - start
 
         s = _seconds_to_ass_time(start)
         e = _seconds_to_ass_time(end)
 
-        curr_text = escape_and_wrap(line["text"], is_dim=False)
-
-        # 当前行（中间，正常颜色，Layer=1）
-        # 第一行歌词不做淡入，避免与封面帧切换时出现突变
+        # — 当前行：卡拉 OK 效果（Layer=2）—
         fade_in = 0 if i == 0 else anim_in_ms
-        curr_tag = (
-            f"{{\\an5"
-            f"\\pos({cx},{cy})"
-            f"\\fad({fade_in},{fade_out_ms})"
-            f"}}"
-        )
-        events.append(
-            f"Dialogue: 1,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}"
-        )
+        curr_tag = f"{{\\an5\\pos({cx},{cy})\\fad({fade_in},{fade_out_ms})}}"
+        curr_text = build_karaoke_text(line["text"], line_duration)
+        events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}")
 
-        # 上一行（当前行上方，淡色，Layer=0）
-        # 静止在上方位置，淡入显示（无需移动，是已显示的前一句）
+        # — 上一行：已唱颜色（Layer=1）—
         if i > 0:
-            prev_text = escape_and_wrap(lrc_lines[i - 1]["text"], is_dim=True)
-            prev_y = cy - line_gap
             dim_fade_in = 0 if i == 1 else dim_fade_ms
-            dim_tag = (
-                f"{{\\an5"
-                f"\\pos({cx},{prev_y})"
-                f"\\fad({dim_fade_in},0)"
-                f"}}"
-            )
-            events.append(
-                f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{dim_tag}{prev_text}"
-            )
+            prev_tag = f"{{\\an5\\pos({cx},{cy - line_gap})\\fad({dim_fade_in},0)}}"
+            prev_text = build_prev_text(lrc_lines[i - 1]["text"])
+            events.append(f"Dialogue: 1,{s},{e},Prev,,0,0,0,,{prev_tag}{prev_text}")
 
-        # 下一行（当前行下方，淡色，Layer=0）
-        # 静止在下方位置，淡入显示
+        # — 下一行：淡色未唱（Layer=0）—
         if i + 1 < len(lrc_lines):
-            next_text = escape_and_wrap(lrc_lines[i + 1]["text"], is_dim=True)
-            next_y = cy + line_gap
-            # 第一帧时下方行也不做淡入，确保封面完整显示
             next_fade_in = 0 if i == 0 else dim_fade_ms
-            dim_tag = (
-                f"{{\\an5"
-                f"\\pos({cx},{next_y})"
-                f"\\fad({next_fade_in},0)"
-                f"}}"
-            )
-            events.append(
-                f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{dim_tag}{next_text}"
-            )
+            next_tag = f"{{\\an5\\pos({cx},{cy + line_gap})\\fad({next_fade_in},0)}}"
+            next_text = build_next_text(lrc_lines[i + 1]["text"])
+            events.append(f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{next_tag}{next_text}")
 
     return header + "\n".join(events) + "\n"
 
@@ -550,7 +553,8 @@ async def generate_lyric_video(
     lrc_lines: list[dict],
     bg_color: str,
     font_size: int,
-    font_color: str,
+    sung_color: str,
+    unsung_color: str,
     stroke_color: str,
     stroke_width: int,
     resolution: str,
@@ -579,18 +583,17 @@ async def generate_lyric_video(
         raise RuntimeError("无法读取音频时长，请检查文件格式")
     logger.info(f"[歌词视频] 音频时长: {audio_duration:.2f}s")
 
-    # 2. 提取字体名（FFmpeg ASS 滤镜需要字体名而非路径）
-    # 对于内嵌字体或已安装字体，只需提供 font name；
-    # 若直接指定字体文件路径，需要用 fontsdir 或 force_style
-    font_name = Path(font_path).stem  # e.g. "NotoSansSC-Bold"
+    # 2. 提取字体名
+    font_name = Path(font_path).stem
 
-    # 3. 生成 ASS 字幕内容
+    # 3. 生成 ASS 字幕内容（卡拉 OK 逐字变色）
     ass_content = _lrc_to_ass(
         lrc_lines=lrc_lines,
         audio_duration=audio_duration,
         font_name=font_name,
         font_size=font_size,
-        font_color=font_color,
+        sung_color=sung_color,
+        unsung_color=unsung_color,
         stroke_color=stroke_color,
         stroke_width=stroke_width,
         resolution=resolution,
