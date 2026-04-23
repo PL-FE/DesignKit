@@ -54,7 +54,8 @@ echo "🚀 启动 FastAPI 服务..."
 python3 -m uvicorn main:app \
     --host "${HOST:-0.0.0.0}" \
     --port "${PORT:-8000}" \
-    --workers 2 &
+    --workers 2 \
+    --timeout-keep-alive 300 &
 APP_PID=$!
 
 wait "${APP_PID}"

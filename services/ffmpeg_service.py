@@ -269,14 +269,15 @@ async def separate_vocals(input_path: str) -> str:
     ]
     
     try:
+        process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
-            # 增加 120 秒超时控制
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+            # 增加 300 秒超时控制
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.error("demucs 执行超时（超过 120 秒）")
-            raise RuntimeError("人声分离超时（限时 120 秒），请尝试较短的音频")
+            logger.error("demucs 执行超时（超过 300 秒）")
+            raise RuntimeError("人声分离超时（限时 300 秒），请尝试较短的音频")
 
         if process.returncode != 0:
             err_output = stderr.decode()
@@ -651,7 +652,7 @@ async def generate_lyric_video(
             "-map", "0:v", "-map", "1:a",
         ]
 
-        result_path = await execute_ffmpeg(audio_path, args, ".mp4", timeout=120)
+        result_path = await execute_ffmpeg(audio_path, args, ".mp4", timeout=300)
         logger.info(f"[歌词视频] 合成完成: {result_path}")
         return result_path
 
