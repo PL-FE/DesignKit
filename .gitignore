@@ -31,3 +31,8 @@ pip-delete-this-directory.txt
 *.log
 .coverage
 htmlcov/
+
+# SQLite 任务存储（运行时生成）
+task_store.db
+task_store.db-wal
+task_store.db-shm
