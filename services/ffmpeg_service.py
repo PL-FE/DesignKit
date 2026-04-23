@@ -86,7 +86,9 @@ async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str, time
         if process.returncode != 0:
             err_msg = stderr.decode()
             logger.error(f"ffmpeg 执行失败: {err_msg}")
-            raise RuntimeError("媒体处理失败，可能是不支持的格式或参数配置错误")
+            err_lines = [line.strip() for line in err_msg.splitlines() if line.strip()]
+            err_excerpt = " | ".join(err_lines[-6:]) if err_lines else "未知 FFmpeg 错误"
+            raise RuntimeError(f"媒体处理失败: {err_excerpt}")
             
         if not output_file.exists():
             raise RuntimeError("FFmpeg 执行成功，但并未生成输出文件")
