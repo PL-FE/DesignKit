@@ -28,6 +28,7 @@ async def lyric_video_generate_endpoint(
     audio: UploadFile = File(..., description="音频文件（MP3/WAV/FLAC 等）"),
     lrc: UploadFile = File(..., description="LRC 格式歌词文件"),
     bg_color: str = Form("#000000", description="背景颜色（#RRGGBB）"),
+    background_mode: str = Form("video", description="背景模式：video 视频背景，image 图片背景，color 纯色背景"),
     font_size: int = Form(150, description="字体大小（px），建议 80~200"),
     sung_color: str = Form("#ff0000", description="已唱部分颜色（#RRGGBB），默认红色"),
     unsung_color: str = Form("#ffffff", description="未唱部分颜色（#RRGGBB），默认白色"),
@@ -59,6 +60,9 @@ async def lyric_video_generate_endpoint(
     # 验证描边宽度范围
     if not (0 <= stroke_width <= 12):
         raise HTTPException(status_code=400, detail="描边宽度应在 0~12 之间")
+
+    if background_mode not in {"video", "image", "color"}:
+        raise HTTPException(status_code=400, detail="背景模式无效，应为 video、image 或 color")
 
     # 检查字体文件是否存在
     if not os.path.exists(_FONT_PATH):
@@ -110,6 +114,7 @@ async def lyric_video_generate_endpoint(
             line_gap_ratio=line_gap_ratio,
             wrap_mode=wrap_mode,
             max_chars_per_line=max_chars_per_line,
+            background_mode=background_mode,
         )
 
         # 5. 构造下载文件名

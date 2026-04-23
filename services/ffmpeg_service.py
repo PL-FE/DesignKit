@@ -3,10 +3,17 @@ import tempfile
 import shutil
 import logging
 import os
+import random
 from pathlib import Path
 import json
+import math
+import urllib.request
 
 logger = logging.getLogger(__name__)
+
+_LYRIC_BG_VIDEO_PATH = Path(__file__).parent.parent / "assets" / "123.mp4"
+_LYRIC_BG_IMAGE_URL = "https://picsum.photos/200/300"
+_LYRIC_BG_IMAGE_INTERVAL = 10
 
 async def execute_ffprobe(input_path: str) -> dict:
     """
@@ -91,6 +98,89 @@ async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str, time
         
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
+
+
+async def _download_random_bg_images(audio_duration: float) -> tuple[str, list[str]]:
+    image_count = max(1, math.ceil(audio_duration / _LYRIC_BG_IMAGE_INTERVAL))
+    image_dir = tempfile.mkdtemp(prefix="lyric_bg_imgs_")
+    image_paths: list[str] = []
+
+    async def download_one(index: int) -> str:
+        image_path = os.path.join(image_dir, f"bg_{index:03d}.jpg")
+        request = urllib.request.Request(
+            f"{_LYRIC_BG_IMAGE_URL}?random={random.randint(1, 10_000_000)}_{index}",
+            headers={"User-Agent": "DesignKit/1.0"},
+        )
+
+        def _fetch() -> str:
+            with urllib.request.urlopen(request, timeout=15) as response, open(image_path, "wb") as f:
+                shutil.copyfileobj(response, f)
+            return image_path
+
+        return await asyncio.to_thread(_fetch)
+
+    try:
+        for index in range(image_count):
+            image_paths.append(await download_one(index))
+        return image_dir, image_paths
+    except Exception:
+        shutil.rmtree(image_dir, ignore_errors=True)
+        raise
+
+
+def _build_image_concat_file(image_paths: list[str], audio_duration: float) -> str:
+    concat_file = tempfile.mktemp(suffix=".txt")
+    segment_duration = _LYRIC_BG_IMAGE_INTERVAL
+
+    with open(concat_file, "w", encoding="utf-8") as f:
+        for image_path in image_paths:
+            escaped_path = image_path.replace("'", "'\\''").replace('\\', '/')
+            f.write(f"file '{escaped_path}'\n")
+            f.write(f"duration {segment_duration}\n")
+
+        last_image_path = image_paths[-1].replace("'", "'\\''").replace('\\', '/')
+        f.write(f"file '{last_image_path}'\n")
+
+    return concat_file
+
+
+def _build_subtitle_filter(escaped_ass: str, escaped_fontsdir: str) -> str:
+    return f"subtitles='{escaped_ass}':fontsdir='{escaped_fontsdir}'"
+
+
+def _build_cover_filter(width: str, height: str) -> str:
+    return f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=20"
+
+
+def _build_dimmed_cover_filter(width: str, height: str, escaped_ass: str, escaped_fontsdir: str) -> str:
+    subtitle_filter = _build_subtitle_filter(escaped_ass, escaped_fontsdir)
+    return (
+        f"{_build_cover_filter(width, height)},"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.42:t=fill,"
+        f"{subtitle_filter}"
+    )
+
+
+def _build_glow_background_source(width: str, height: str, ffmpeg_bg_color: str) -> str:
+    base = ffmpeg_bg_color.replace("0x", "")
+    return (
+        f"color=c=0x{base}:size={width}x{height}:rate=20,"
+        f"format=rgba,"
+        f"drawbox=x='W*0.18+sin(t*0.55)*W*0.12':y='H*0.20+cos(t*0.43)*H*0.10':w='W*0.30':h='H*0.30':color=0xff6b6b@0.20:t=fill,"
+        f"drawbox=x='W*0.56+cos(t*0.37)*W*0.11':y='H*0.22+sin(t*0.61)*H*0.10':w='W*0.24':h='H*0.24':color=0x7c4dff@0.18:t=fill,"
+        f"drawbox=x='W*0.34+cos(t*0.29)*W*0.14':y='H*0.58+sin(t*0.48)*H*0.10':w='W*0.34':h='H*0.34':color=0x4dd0e1@0.16:t=fill,"
+        f"gblur=sigma=70:steps=2,"
+        f"format=yuv420p"
+    )
+
+
+def _build_glow_background_filter(escaped_ass: str, escaped_fontsdir: str) -> str:
+    subtitle_filter = _build_subtitle_filter(escaped_ass, escaped_fontsdir)
+    return f"eq=brightness=-0.02:saturation=1.15,{subtitle_filter}"
+
+
+def _build_solid_background_filter(escaped_ass: str, escaped_fontsdir: str) -> str:
+    return _build_subtitle_filter(escaped_ass, escaped_fontsdir)
 
 async def convert_format(input_path: str, target_format: str) -> str:
     """
@@ -564,6 +654,7 @@ async def generate_lyric_video(
     line_gap_ratio: float = 1.8,
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
+    background_mode: str = "video",
 ) -> str:
     """
     使用 FFmpeg 将音频和解析后的 LRC 歌词合成为带字幕的 MP4 视频。
@@ -617,49 +708,124 @@ async def generate_lyric_video(
     bg_hex = bg_color.lstrip('#')
     ffmpeg_bg_color = f"0x{bg_hex}"
 
+    bg_video_path = _LYRIC_BG_VIDEO_PATH
+    use_bg_video = bg_video_path.exists()
+    bg_video_duration = 0.0
+    bg_seek_start = 0.0
+    bg_image_dir = None
+    bg_image_paths: list[str] = []
+    bg_image_concat_file = None
+    normalized_background_mode = (background_mode or "video").lower()
+    use_bg_image = False
+
+    if normalized_background_mode not in {"video", "image", "color"}:
+        normalized_background_mode = "video"
+
+    if normalized_background_mode == "video" and use_bg_video:
+        try:
+            bg_probe_data = await execute_ffprobe(str(bg_video_path))
+            bg_video_duration = float(bg_probe_data.get("format", {}).get("duration", 0))
+            if bg_video_duration <= 0:
+                logger.warning(f"[歌词视频] 背景视频时长无效，回退纯色背景: {bg_video_path}")
+                use_bg_video = False
+            else:
+                max_seek_start = max(0.0, bg_video_duration - audio_duration)
+                bg_seek_start = random.uniform(0.0, max_seek_start) if max_seek_start > 0 else 0.0
+                logger.info(
+                    f"[歌词视频] 使用背景视频: {bg_video_path}, 时长: {bg_video_duration:.2f}s, "
+                    f"随机截取起点: {bg_seek_start:.2f}s"
+                )
+        except Exception as e:
+            logger.warning(f"[歌词视频] 背景视频不可用，回退纯色背景: {bg_video_path}, 原因: {str(e)}")
+            use_bg_video = False
+    else:
+        use_bg_video = False
+
+    if normalized_background_mode in {"video", "image"} and not use_bg_video:
+        try:
+            bg_image_dir, bg_image_paths = await _download_random_bg_images(audio_duration)
+            bg_image_concat_file = _build_image_concat_file(bg_image_paths, audio_duration)
+            use_bg_image = True
+            logger.info(f"[歌词视频] 已下载 {len(bg_image_paths)} 张背景图用于轮播背景")
+        except Exception as e:
+            logger.warning(f"[歌词视频] 背景图下载失败，回退纯色背景，原因: {str(e)}")
+            bg_image_dir = None
+            bg_image_paths = []
+            bg_image_concat_file = None
+            use_bg_image = False
+
     try:
-        # 7. 构建 FFmpeg 命令
-        # 视频流：lavfi color 生成纯色背景，叠加 ASS 字幕
-        # 音频流：直接使用输入音频
-        # ASS 字幕中指定 fontsdir 以便 FFmpeg 找到自定义字体
         fontsdir = str(Path(font_path).parent)
 
-        # ASS 路径在 Windows 需要转义冒号，Linux/Mac 直接用即可
         escaped_ass = ass_file.replace('\\', '/').replace(':', '\\:')
         escaped_fontsdir = fontsdir.replace('\\', '/').replace(':', '\\:')
 
-        vf = (
-            f"subtitles='{escaped_ass}':fontsdir='{escaped_fontsdir}'"
-        )
+        if use_bg_video:
+            vf = _build_dimmed_cover_filter(width, height, escaped_ass, escaped_fontsdir)
 
-        args = [
-            # 视频流：纯色背景，降低帧率到 20 以减轻 CPU 压力
-            "-f", "lavfi",
-            "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=20",
-            # 音频流
-            "-i", audio_path,
-            # 时长与音频一致
-            "-t", str(audio_duration),
-            # 视频滤镜：叠加 ASS 字幕
-            "-vf", vf,
-            # 编码策略优化：
-            # - ultrafast: 最低 CPU 占用，极速导出
-            # - tune stillimage: 针对静态背景调优
-            # - threads 2: 限制并发线程，适配核心数
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "2",
-            "-c:a", "aac", "-b:a", "192k",
-            # 映射：第一个输入的视频 + 第二个输入的音频
-            "-map", "0:v", "-map", "1:a",
-        ]
+            args = [
+                "-ss", f"{bg_seek_start:.3f}",
+                "-i", str(bg_video_path),
+                "-i", audio_path,
+                "-t", str(audio_duration),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:a", "aac", "-b:a", "192k",
+                "-map", "0:v", "-map", "1:a",
+            ]
+        elif use_bg_image and bg_image_concat_file:
+            vf = _build_dimmed_cover_filter(width, height, escaped_ass, escaped_fontsdir)
+
+            args = [
+                "-f", "concat",
+                "-safe", "0",
+                "-i", bg_image_concat_file,
+                "-i", audio_path,
+                "-t", str(audio_duration),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:a", "aac", "-b:a", "192k",
+                "-map", "0:v", "-map", "1:a",
+            ]
+        elif normalized_background_mode == "color":
+            vf = _build_solid_background_filter(escaped_ass, escaped_fontsdir)
+
+            args = [
+                "-f", "lavfi",
+                "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=20",
+                "-i", audio_path,
+                "-t", str(audio_duration),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "2",
+                "-c:a", "aac", "-b:a", "192k",
+                "-map", "0:v", "-map", "1:a",
+            ]
+        else:
+            glow_background = _build_glow_background_source(width, height, ffmpeg_bg_color)
+            vf = _build_glow_background_filter(escaped_ass, escaped_fontsdir)
+
+            args = [
+                "-f", "lavfi",
+                "-i", glow_background,
+                "-i", audio_path,
+                "-t", str(audio_duration),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:a", "aac", "-b:a", "192k",
+                "-map", "0:v", "-map", "1:a",
+            ]
 
         result_path = await execute_ffmpeg(audio_path, args, ".mp4", timeout=300)
         logger.info(f"[歌词视频] 合成完成: {result_path}")
         return result_path
 
     finally:
-        # 清理临时 ASS 文件
         if os.path.exists(ass_file):
             os.remove(ass_file)
+        if bg_image_concat_file and os.path.exists(bg_image_concat_file):
+            os.remove(bg_image_concat_file)
+        if bg_image_dir and os.path.exists(bg_image_dir):
+            shutil.rmtree(bg_image_dir, ignore_errors=True)
 
 
 async def merge_audio(input_paths: list[str]) -> str:
