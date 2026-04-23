@@ -36,6 +36,8 @@ async def lyric_video_generate_endpoint(
     remove_vocals: bool = Form(False, description="是否去除人声（使用 AI 伴奏提取，耗时较长）"),
     letter_spacing: int = Form(8, description="字符间距（px），对应 ASS Spacing，0~30"),
     line_gap_ratio: float = Form(1.5, description="行间距倍数（相对于 font_size），建议 1.2~3.0"),
+    wrap_mode: str = Form("auto", description="换行模式：auto 自动换行，chars 手动指定每行最大字符数"),
+    max_chars_per_line: int = Form(11, description="手动指定每行最大字符数（仅 wrap_mode=chars 时生效）"),
 ):
     """
     歌词视频合成接口。
@@ -91,6 +93,10 @@ async def lyric_video_generate_endpoint(
             actual_audio = vocal_removed_path
             logger.info(f"[歌词视频] 人声分离完成: {vocal_removed_path}")
 
+        # 将第一句歌词时间设为 0，使其在第一帧显示，作为视频封面
+        if lrc_lines and lrc_lines[0]["time"] > 0:
+            lrc_lines[0]["time"] = 0.0
+
         # 4. 合成歌词视频
         result_path = await generate_lyric_video(
             audio_path=actual_audio,
@@ -104,11 +110,23 @@ async def lyric_video_generate_endpoint(
             font_path=font_path,
             letter_spacing=letter_spacing,
             line_gap_ratio=line_gap_ratio,
+            wrap_mode=wrap_mode,
+            max_chars_per_line=max_chars_per_line,
         )
 
         # 5. 构造下载文件名
         base_name = Path(audio_filename).stem
-        output_filename = f"{base_name}_lyrics_video.mp4"
+        if lrc_lines and lrc_lines[0]["text"]:
+            import re
+            first_line_text = lrc_lines[0]["text"]
+            safe_name = re.sub(r'[\\/*?:"<>|]', "", first_line_text).strip()
+            if safe_name:
+                output_filename = f"{safe_name}.mp4"
+            else:
+                output_filename = f"{base_name}_lyrics_video.mp4"
+        else:
+            output_filename = f"{base_name}_lyrics_video.mp4"
+            
         encoded_filename = urllib.parse.quote(output_filename)
 
         def cleanup():

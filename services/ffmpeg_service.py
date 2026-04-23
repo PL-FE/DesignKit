@@ -343,7 +343,28 @@ def parse_lrc(lrc_content: str) -> list[dict]:
 
     # 按时间排序
     lines.sort(key=lambda x: x["time"])
-    return lines
+    
+    # 过滤相同时间的歌词
+    # 最早时间组（通常为 00:00 元数据块）保留第一行（歌名），其余丢弃
+    # 其他同时间组保留最后一行（防止重影）
+    unique_lines = []
+    first_group_done = False
+    for line in lines:
+        if unique_lines and abs(line["time"] - unique_lines[-1]["time"]) < 0.1:
+            # 同一时间组
+            if not first_group_done:
+                # 还在最早时间组内，跳过后续行（只保留第一行歌名）
+                continue
+            else:
+                # 其他同时间组，替换为最后一行
+                unique_lines[-1] = line
+        else:
+            # 新的时间组开始
+            if not first_group_done:
+                first_group_done = True
+            unique_lines.append(line)
+            
+    return unique_lines
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
@@ -366,6 +387,8 @@ def _lrc_to_ass(
     resolution: str,
     letter_spacing: int = 2,
     line_gap_ratio: float = 1.8,
+    wrap_mode: str = "auto",
+    max_chars_per_line: int = 11,
 ) -> str:
     """
     将解析后的 LRC 行列表转换为 ASS 字幕格式字符串。
@@ -425,8 +448,26 @@ Style: Dim,{font_name},{dim_size},{dim_color},&H000000FF,{dim_outline},&H8000000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    def escape(text: str) -> str:
-        return text.replace("\\", "\\\\").replace("{", "\\{")
+    def escape_and_wrap(text: str, is_dim: bool = False) -> str:
+        # 计算每行最大字符数
+        if wrap_mode == "chars":
+            # 手动指定模式：直接使用用户设定的字符数
+            limit = max_chars_per_line
+        else:
+            # 自动模式：根据视频宽度、字号和间距计算
+            # CJK 字符宽度约等于字号，加上 Spacing 间距
+            f_size = dim_size if is_dim else font_size
+            spacing = dim_spacing if is_dim else letter_spacing
+            # 每字符占 (f_size * 1.0 + spacing) 像素宽度
+            # 留出左右各 3% 边距，可用宽度为 94%
+            usable_width = width * 0.94
+            limit = max(5, int(usable_width / (f_size + spacing)))
+        
+        if len(text) > limit:
+            chunks = [text[i:i+limit] for i in range(0, len(text), limit)]
+            text = "\\N".join(chunks)
+            
+        return text.replace("\\", "\\\\").replace("{", "\\{").replace("\\\\N", "\\N")
 
     events = []
     for i, line in enumerate(lrc_lines):
@@ -443,14 +484,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         s = _seconds_to_ass_time(start)
         e = _seconds_to_ass_time(end)
 
-        curr_text = escape(line["text"])
+        curr_text = escape_and_wrap(line["text"], is_dim=False)
 
         # 当前行（中间，正常颜色，Layer=1）
-        # 纯淡入淡出旲动，无移动动画
+        # 第一行歌词不做淡入动画，确保视频封面（第0帧）立刻可见
+        fade_in = 0 if i == 0 else anim_in_ms
         curr_tag = (
             f"{{\\an5"
             f"\\pos({cx},{cy})"
-            f"\\fad({anim_in_ms},{fade_out_ms})"
+            f"\\fad({fade_in},{fade_out_ms})"
             f"}}"
         )
         events.append(
@@ -460,12 +502,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # 上一行（当前行上方，淡色，Layer=0）
         # 静止在上方位置，淡入显示（无需移动，是已显示的前一句）
         if i > 0:
-            prev_text = escape(lrc_lines[i - 1]["text"])
+            prev_text = escape_and_wrap(lrc_lines[i - 1]["text"], is_dim=True)
             prev_y = cy - line_gap
+            dim_fade_in = 0 if i == 1 else dim_fade_ms
             dim_tag = (
                 f"{{\\an5"
                 f"\\pos({cx},{prev_y})"
-                f"\\fad({dim_fade_ms},0)"
+                f"\\fad({dim_fade_in},0)"
                 f"}}"
             )
             events.append(
@@ -475,12 +518,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # 下一行（当前行下方，淡色，Layer=0）
         # 静止在下方位置，淡入显示
         if i + 1 < len(lrc_lines):
-            next_text = escape(lrc_lines[i + 1]["text"])
+            next_text = escape_and_wrap(lrc_lines[i + 1]["text"], is_dim=True)
             next_y = cy + line_gap
+            # 第一帧时下方行也不做淡入，确保封面完整显示
+            next_fade_in = 0 if i == 0 else dim_fade_ms
             dim_tag = (
                 f"{{\\an5"
                 f"\\pos({cx},{next_y})"
-                f"\\fad({dim_fade_ms},0)"
+                f"\\fad({next_fade_in},0)"
                 f"}}"
             )
             events.append(
@@ -504,6 +549,8 @@ async def generate_lyric_video(
     font_path: str,
     letter_spacing: int = 2,
     line_gap_ratio: float = 1.8,
+    wrap_mode: str = "auto",
+    max_chars_per_line: int = 11,
 ) -> str:
     """
     使用 FFmpeg 将音频和解析后的 LRC 歌词合成为带字幕的 MP4 视频。
@@ -541,6 +588,8 @@ async def generate_lyric_video(
         resolution=resolution,
         letter_spacing=letter_spacing,
         line_gap_ratio=line_gap_ratio,
+        wrap_mode=wrap_mode,
+        max_chars_per_line=max_chars_per_line,
     )
 
     # 4. 写入临时 ASS 文件
