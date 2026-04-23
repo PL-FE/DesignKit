@@ -93,10 +93,6 @@ async def lyric_video_generate_endpoint(
             actual_audio = vocal_removed_path
             logger.info(f"[歌词视频] 人声分离完成: {vocal_removed_path}")
 
-        # 将第一句歌词时间设为 0，使其在第一帧显示，作为视频封面
-        if lrc_lines and lrc_lines[0]["time"] > 0:
-            lrc_lines[0]["time"] = 0.0
-
         # 4. 合成歌词视频
         result_path = await generate_lyric_video(
             audio_path=actual_audio,

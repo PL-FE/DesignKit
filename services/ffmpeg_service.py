@@ -319,6 +319,7 @@ def parse_lrc(lrc_content: str) -> list[dict]:
     返回: [{"time": float（秒）, "text": str}]
     """
     import re
+
     lines = []
     # 匹配标准 LRC 时间标签
     time_pattern = re.compile(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\](.*)$')
@@ -348,20 +349,17 @@ def parse_lrc(lrc_content: str) -> list[dict]:
     # 最早时间组（通常为 00:00 元数据块）保留第一行（歌名），其余丢弃
     # 其他同时间组保留最后一行（防止重影）
     unique_lines = []
-    first_group_done = False
+    first_group_time = lines[0]["time"] if lines else None
     for line in lines:
         if unique_lines and abs(line["time"] - unique_lines[-1]["time"]) < 0.1:
             # 同一时间组
-            if not first_group_done:
+            if first_group_time is not None and abs(line["time"] - first_group_time) < 0.1:
                 # 还在最早时间组内，跳过后续行（只保留第一行歌名）
                 continue
             else:
                 # 其他同时间组，替换为最后一行
                 unique_lines[-1] = line
         else:
-            # 新的时间组开始
-            if not first_group_done:
-                first_group_done = True
             unique_lines.append(line)
             
     return unique_lines
@@ -470,6 +468,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return text.replace("\\", "\\\\").replace("{", "\\{").replace("\\\\N", "\\N")
 
     events = []
+    # 插入 1 帧标题封面（使用总歌词第一行），不修改原歌词时间轴
+    if lrc_lines and lrc_lines[0]["text"]:
+        cover_start = _seconds_to_ass_time(0.0)
+        cover_end = _seconds_to_ass_time(0.05)  # 20fps 下约 1 帧
+        cover_text = escape_and_wrap(lrc_lines[0]["text"], is_dim=False)
+        cover_tag = f"{{\\an5\\pos({cx},{cy})\\fad(0,0)}}"
+        events.append(
+            f"Dialogue: 2,{cover_start},{cover_end},Default,,0,0,0,,{cover_tag}{cover_text}"
+        )
+
     for i, line in enumerate(lrc_lines):
         start = line["time"]
         # 结束时间为下一句开始前 0.05 秒，或音频总时长
@@ -487,7 +495,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         curr_text = escape_and_wrap(line["text"], is_dim=False)
 
         # 当前行（中间，正常颜色，Layer=1）
-        # 第一行歌词不做淡入动画，确保视频封面（第0帧）立刻可见
+        # 第一行歌词不做淡入，避免与封面帧切换时出现突变
         fade_in = 0 if i == 0 else anim_in_ms
         curr_tag = (
             f"{{\\an5"
