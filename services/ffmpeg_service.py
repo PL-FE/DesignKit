@@ -120,8 +120,15 @@ async def _download_random_bg_images(audio_duration: float) -> tuple[str, list[s
         return await asyncio.to_thread(_fetch)
 
     try:
-        for index in range(image_count):
-            image_paths.append(await download_one(index))
+        # 并发下载，限制最大并发数为 5
+        semaphore = asyncio.Semaphore(5)
+
+        async def limited_download(index: int) -> str:
+            async with semaphore:
+                return await download_one(index)
+
+        results = await asyncio.gather(*[limited_download(i) for i in range(image_count)])
+        image_paths.extend(results)
         return image_dir, image_paths
     except Exception:
         shutil.rmtree(image_dir, ignore_errors=True)
@@ -334,6 +341,10 @@ async def separate_vocals(input_path: str) -> str:
     env["PYTHONHTTPSVERIFY"] = "0"
     env["CURL_CA_BUNDLE"] = ""
     env["SSL_CERT_FILE"] = ""
+    # 限制 torch CPU 线程数，避免吃满所有核心导致其他进程卡死
+    env["OMP_NUM_THREADS"] = "2"
+    env["MKL_NUM_THREADS"] = "2"
+    env["TORCH_NUM_THREADS"] = "2"
 
     # 创建输出目录
     output_dir = tempfile.mkdtemp(prefix="demucs_out_")
@@ -359,7 +370,7 @@ async def separate_vocals(input_path: str) -> str:
     ]
     
     try:
-        process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
         try:
             # 增加 300 秒超时控制
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
@@ -769,7 +780,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
@@ -783,7 +794,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
@@ -796,7 +807,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
@@ -810,7 +821,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
