@@ -9,6 +9,7 @@ import asyncio
 import time
 import logging
 import uuid
+import threading
 from enum import Enum
 from typing import Any, Callable, Awaitable, Optional
 from pathlib import Path
@@ -21,7 +22,7 @@ _DB_PATH = str(Path(__file__).parent.parent / "task_store.db")
 
 def _init_db() -> sqlite3.Connection:
     """创建数据库连接并初始化表结构。"""
-    conn = sqlite3.connect(_DB_PATH, timeout=10)
+    conn = sqlite3.connect(_DB_PATH, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -43,13 +44,15 @@ def _init_db() -> sqlite3.Connection:
 
 # 模块级连接（每个 worker 进程各自持有）
 _conn: Optional[sqlite3.Connection] = None
+_lock = threading.Lock()
 
 
 def _ensure_conn() -> sqlite3.Connection:
     global _conn
-    if _conn is None:
-        _conn = _init_db()
-    return _conn
+    with _lock:
+        if _conn is None:
+            _conn = _init_db()
+        return _conn
 
 
 class TaskStatus(str, Enum):
@@ -96,20 +99,21 @@ class TaskInfo:
 def _save_task(task_info: TaskInfo) -> None:
     conn = _ensure_conn()
     status_val = task_info.status.value if isinstance(task_info.status, TaskStatus) else task_info.status
-    conn.execute("""
-        INSERT OR REPLACE INTO tasks (task_id, status, progress, result_path, result_filename, error, created_at, finished_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        task_info.task_id,
-        status_val,
-        task_info.progress,
-        task_info.result_path,
-        task_info.result_filename,
-        task_info.error,
-        task_info.created_at,
-        task_info.finished_at,
-    ))
-    conn.commit()
+    with _lock:
+        conn.execute("""
+            INSERT OR REPLACE INTO tasks (task_id, status, progress, result_path, result_filename, error, created_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            task_info.task_id,
+            status_val,
+            task_info.progress,
+            task_info.result_path,
+            task_info.result_filename,
+            task_info.error,
+            task_info.created_at,
+            task_info.finished_at,
+        ))
+        conn.commit()
 
 
 def _row_to_taskinfo(row: sqlite3.Row) -> TaskInfo:
@@ -136,7 +140,8 @@ def create_task() -> TaskInfo:
 
 def get_task(task_id: str) -> Optional[TaskInfo]:
     conn = _ensure_conn()
-    row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    with _lock:
+        row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
     if row is None:
         return None
     return _row_to_taskinfo(row)
@@ -144,8 +149,9 @@ def get_task(task_id: str) -> Optional[TaskInfo]:
 
 def remove_task(task_id: str) -> None:
     conn = _ensure_conn()
-    conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
-    conn.commit()
+    with _lock:
+        conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        conn.commit()
 
 
 async def run_background(
@@ -171,8 +177,9 @@ def cleanup_old_tasks(max_age: float = 3600) -> None:
     """清理超过 max_age 秒的已完成/失败任务"""
     now = time.time()
     conn = _ensure_conn()
-    conn.execute(
-        "DELETE FROM tasks WHERE finished_at IS NOT NULL AND (? - finished_at) > ?",
-        (now, max_age),
-    )
-    conn.commit()
+    with _lock:
+        conn.execute(
+            "DELETE FROM tasks WHERE finished_at IS NOT NULL AND (? - finished_at) > ?",
+            (now, max_age),
+        )
+        conn.commit()
