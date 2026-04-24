@@ -75,6 +75,11 @@ async def _do_generate(
     line_gap_ratio: float,
     wrap_mode: str,
     max_chars_per_line: int,
+    lines_mode: str,
+    cover_title: str,
+    cover_subtitle: str,
+    cover_title_font_size: int,
+    cover_subtitle_font_size: int,
     input_dir: str,
 ):
     vocal_removed_path = None
@@ -108,6 +113,11 @@ async def _do_generate(
             wrap_mode=wrap_mode,
             max_chars_per_line=max_chars_per_line,
             background_mode=background_mode,
+            lines_mode=lines_mode,
+            cover_title=cover_title,
+            cover_subtitle=cover_subtitle,
+            cover_title_font_size=cover_title_font_size,
+            cover_subtitle_font_size=cover_subtitle_font_size,
         )
 
         # 3. 构造下载文件名
@@ -163,6 +173,12 @@ async def lyric_video_generate_endpoint(
     line_gap_ratio: float = Form(1.5, description="行间距倍数（相对于 font_size），建议 1.2~3.0"),
     wrap_mode: str = Form("auto", description="换行模式：auto 自动换行，chars 手动指定每行最大字符数"),
     max_chars_per_line: int = Form(11, description="手动指定每行最大字符数（仅 wrap_mode=chars 时生效）"),
+    lines_mode: str = Form("3", description="歌词行数模式：3=三行滚动，2=两行居中"),
+    # 封面文字参数
+    cover_title: str = Form("", description="封面标题文字（显示在视频开头，留空则跳过封面）"),
+    cover_subtitle: str = Form("", description="封面副标题文字"),
+    cover_title_font_size: int = Form(120, description="封面标题字号"),
+    cover_subtitle_font_size: int = Form(80, description="封面副标题字号"),
 ):
     """
     歌词视频合成接口（异步任务模式）。
@@ -215,6 +231,7 @@ async def lyric_video_generate_endpoint(
     cleanup_old_tasks()
     task_info = create_task()
     logger.info(f"[歌词视频] 创建异步任务: {task_info.task_id}")
+    logger.info(f"[歌词视频] 封面参数: title='{cover_title}', subtitle='{cover_subtitle}', title_font_size={cover_title_font_size}, subtitle_font_size={cover_subtitle_font_size}")
 
     asyncio.create_task(run_background(
         task_info,
@@ -236,6 +253,11 @@ async def lyric_video_generate_endpoint(
         line_gap_ratio=line_gap_ratio,
         wrap_mode=wrap_mode,
         max_chars_per_line=max_chars_per_line,
+        lines_mode=lines_mode,
+        cover_title=cover_title,
+        cover_subtitle=cover_subtitle,
+        cover_title_font_size=cover_title_font_size,
+        cover_subtitle_font_size=cover_subtitle_font_size,
         input_dir=input_dir,
     ))
 

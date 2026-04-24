@@ -492,7 +492,11 @@ def _lrc_to_ass(
     line_gap_ratio: float = 1.5,
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
-    lines_mode: str = "3",  # 新增：歌词行数模式，3=三行滚动，2=两行居中
+    lines_mode: str = "3",
+    cover_title: str = "",
+    cover_subtitle: str = "",
+    cover_title_font_size: int = 120,
+    cover_subtitle_font_size: int = 80,
 ) -> str:
     """
     将 LRC 歌词转换为 ASS 字幕，实现卡拉 OK 逐字变色效果。
@@ -504,9 +508,10 @@ def _lrc_to_ass(
 
     两行居中模式（lines_mode="2"）：
       - 第一行（上方）：当前歌词，卡拉 OK 效果
-      - 第二行（下方）：下一句歌词，静态显示
-      - 两行相同大小和颜色，无灰色
-      - 当前行唱完消失，两行同时上移，显示下一句
+      - 第二行（下方）：下一句歌词，静态显示未唱颜色
+      - 两行相同大小，颜色不同（已唱/未唱）
+      - 第一行唱完后保持在上方（已唱颜色），第二行在下方开始唱
+      - 两行都唱完后一起消失，切换到下两行
     """
     def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
         """#RRGGBB → ASS &HAABBGGRR"""
@@ -541,10 +546,10 @@ def _lrc_to_ass(
 
     # 根据行数模式选择样式配置
     if lines_mode == "2":
-        # 两行居中模式：上下行使用相同颜色
+        # 两行居中模式：第一行已唱颜色，第二行未唱颜色
         top_ass = sung_ass   # 第一行（当前）：卡拉OK效果
-        bottom_ass = sung_ass  # 第二行（下一句）：和第一行相同颜色
-        dim_ass = sung_ass
+        bottom_ass = unsung_ass  # 第二行（下一句）：未唱颜色
+        dim_ass = unsung_ass
         # 两行使用相同字号
         top_size = font_size
         bottom_size = font_size
@@ -559,7 +564,7 @@ def _lrc_to_ass(
         bottom_size = dim_size
         dim_outline = dim_outline_ass
 
-    # ASS 基础样式（Default 用于当前行卡拉 OK，Dim 用于上下行）
+    # ASS 基础样式（Default 用于当前行卡拉 OK，Dim 用于上下行，CoverTitle/CoverSubtitle 用于封面文字）
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -573,6 +578,8 @@ Style: Dim,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H8000
 Style: Prev,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
 Style: Top2Line,{font_name},{top_size},{top_ass},{top_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
 Style: Bottom2Line,{font_name},{bottom_size},{bottom_ass},{bottom_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
+Style: CoverTitle,{font_name},{cover_title_font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
+Style: CoverSubtitle,{font_name},{cover_subtitle_font_size},{unsung_ass},{unsung_ass},{outline_ass},&H80000000,0,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -639,13 +646,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     events: list[str] = []
 
-    # 封面帧（第一行歌词，快速闪过）
-    if lrc_lines and lrc_lines[0]["text"]:
+    # 封面文字帧（自定义标题和副标题，显示在歌词之前）
+    if cover_title or cover_subtitle:
+        logger.info(f"[ASS字幕] 生成封面文字: title='{cover_title}', subtitle='{cover_subtitle}'")
+        # 封面显示时长：取第一行歌词开始时间（如果有），或固定 3 秒
+        first_lyric_time = lrc_lines[0]["time"] if lrc_lines and len(lrc_lines) > 0 else 3.0
+        # 封面至少显示 2 秒，最多显示 5 秒
+        cover_duration = max(2.0, min(first_lyric_time, 5.0))
+        cover_end_time = cover_duration
+        logger.info(f"[ASS字幕] 封面时长: {cover_end_time}s, 第一句歌词时间: {first_lyric_time}s")
+        
         cover_start = _seconds_to_ass_time(0.0)
-        cover_end   = _seconds_to_ass_time(0.05)
-        cover_text  = build_karaoke_text(lrc_lines[0]["text"], 0.05)
-        cover_tag   = f"{{\\an5\\pos({cx},{cy})\\fad(0,0)}}"
-        events.append(f"Dialogue: 3,{cover_start},{cover_end},Default,,0,0,0,,{cover_tag}{cover_text}")
+        cover_end = _seconds_to_ass_time(cover_end_time)
+        
+        # 封面标题（居中上方）
+        if cover_title:
+            title_y = cy - int(cover_title_font_size * 0.8) if cover_subtitle else cy
+            title_tag = f"{{\\an5\\pos({cx},{title_y})\\fad(0,500)}}"
+            # 根据换行模式处理标题
+            if wrap_mode == "chars":
+                limit = max_chars_per_line
+            else:
+                usable_width = width * 0.9
+                limit = max(5, int(usable_width / cover_title_font_size))
+            title_chunks = wrap_text(cover_title, limit)
+            title_display = "\\N".join([escape(c) for c in title_chunks])
+            events.append(f"Dialogue: 5,{cover_start},{cover_end},CoverTitle,,0,0,0,,{title_tag}{title_display}")
+        
+        # 封面副标题（居中下方）
+        if cover_subtitle:
+            subtitle_y = cy + int(cover_title_font_size * 0.5) if cover_title else cy
+            subtitle_tag = f"{{\\an5\\pos({cx},{subtitle_y})\\fad(0,500)}}"
+            # 根据换行模式处理副标题
+            if wrap_mode == "chars":
+                limit = max_chars_per_line
+            else:
+                usable_width = width * 0.9
+                limit = max(5, int(usable_width / cover_subtitle_font_size))
+            subtitle_chunks = wrap_text(cover_subtitle, limit)
+            subtitle_display = "\\N".join([escape(c) for c in subtitle_chunks])
+            events.append(f"Dialogue: 4,{cover_start},{cover_end},CoverSubtitle,,0,0,0,,{subtitle_tag}{subtitle_display}")
 
     # 主体歌词行
     for i, line in enumerate(lrc_lines):
@@ -660,21 +700,61 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         if lines_mode == "2":
             # ========== 两行居中模式 ==========
-            # 两行都居中显示，使用相同颜色
-            # 第一行：当前歌词，卡拉 OK 效果
-            fade_in = 0 if i == 0 else anim_in_ms
-            top_tag = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in},{fade_out_ms})}}"
-            top_text = build_karaoke_text(line["text"], line_duration)
-            events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag}{top_text}")
+            # 每两行为一组，组内唱完才翻页
+            # 流程（以第1、2行为例）：
+            # 阶段A：第1行唱（上方，卡拉OK）+ 第2行预览（下方，未唱颜色）
+            # 阶段B：第2行唱（下方，卡拉OK）+ 第1行保持（上方，已唱颜色）
+            # 阶段C：第2行唱完，两行都消失，切换到第3、4行
+            #
+            # 每组的第一行（i=0,2,4...）创建本组的三个阶段
 
-            # 第二行：下一句歌词，静态显示（不唱）
-            if i + 1 < len(lrc_lines):
-                next_text_val = lrc_lines[i + 1]["text"]
-                # 下一句用 sung_color 颜色，不做卡拉 OK 效果
-                bottom_text_content = build_next_text(next_text_val, "Bottom2Line")
-                # 调整位置在第一行下方
-                bottom_tag = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad(0,0)}}"
-                events.append(f"Dialogue: 1,{s},{e},Bottom2Line,,0,0,0,,{bottom_tag}{bottom_text_content}")
+            # 只处理组内第一行（偶数索引）
+            if i % 2 == 0:
+                # 这是组内第一行（如第1、3、5行...）
+                next_i = i + 1  # 组内第二行
+
+                if next_i < len(lrc_lines):
+                    # === 组内有两行 ===
+                    next_line = lrc_lines[next_i]
+                    next_start = next_line["time"]
+                    next_end = lrc_lines[next_i + 1]["time"] - 0.05 if next_i + 1 < len(lrc_lines) else audio_duration
+                    if next_end <= next_start:
+                        next_end = next_start + 0.5
+                    next_duration = next_end - next_start
+
+                    # 阶段A：第一行唱（上方卡拉OK）+ 第二行预览（下方未唱）
+                    # 第二行预览一直持续到它开始唱的时间点，避免间隙闪烁
+                    fade_in_a = 0 if i == 0 else anim_in_ms
+                    top_tag_a = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in_a},{fade_out_ms})}}"
+                    top_text_a = build_karaoke_text(line["text"], line_duration)
+                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag_a}{top_text_a}")
+
+                    # 第二行预览结束时间延续到它开始唱的时间，消除间隙
+                    bottom_end_a = _seconds_to_ass_time(next_start)
+                    bottom_tag_a = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad({anim_in_ms},0)}}"
+                    bottom_text_a = build_next_text(next_line["text"], "Bottom2Line")
+                    events.append(f"Dialogue: 0,{s},{bottom_end_a},Bottom2Line,,0,0,0,,{bottom_tag_a}{bottom_text_a}")
+
+                    # 阶段B：第二行唱（下方卡拉OK）+ 第一行保持（上方已唱颜色）
+                    ns = _seconds_to_ass_time(next_start)
+                    ne = _seconds_to_ass_time(next_end)
+
+                    # 上方第一行保持（已唱颜色）
+                    # 从第一行结束时间开始（而非第二行开始时间），避免间隙闪烁
+                    top_tag_b = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad(0,0)}}"
+                    top_text_b = build_next_text(line["text"], "Top2Line")
+                    events.append(f"Dialogue: 1,{e},{ne},Top2Line,,0,0,0,,{top_tag_b}{top_text_b}")
+
+                    # 下方第二行开始唱（卡拉OK效果），去掉淡入避免闪烁
+                    bottom_tag_b = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad(0,0)}}"
+                    bottom_text_b = build_karaoke_text(next_line["text"], next_duration)
+                    events.append(f"Dialogue: 2,{ns},{ne},Default,,0,0,0,,{bottom_tag_b}{bottom_text_b}")
+                else:
+                    # === 组内只有一行（最后一行）===
+                    fade_in = 0 if i == 0 else anim_in_ms
+                    top_tag = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in},{fade_out_ms})}}"
+                    top_text = build_karaoke_text(line["text"], line_duration)
+                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag}{top_text}")
         else:
             # ========== 三行滚动模式 ==========
             # — 当前行：卡拉 OK 效果（Layer=2）—
@@ -718,7 +798,11 @@ async def generate_lyric_video(
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
     background_mode: str = "video",
-    lines_mode: str = "3",  # 新增：歌词行数模式，3=三行滚动，2=两行居中
+    lines_mode: str = "3",
+    cover_title: str = "",
+    cover_subtitle: str = "",
+    cover_title_font_size: int = 120,
+    cover_subtitle_font_size: int = 80,
 ) -> str:
     """
     使用 FFmpeg 将音频和解析后的 LRC 歌词合成为带字幕的 MP4 视频。
@@ -739,12 +823,54 @@ async def generate_lyric_video(
         raise RuntimeError("无法读取音频时长，请检查文件格式")
     logger.info(f"[歌词视频] 音频时长: {audio_duration:.2f}s")
 
+    # 静音时长（封面 2 秒）
+    silence_duration = 2.0
+    
+    # 1. 生成 4 秒静音音频并与原音频拼接
+    silence_file = None
+    try:
+        # 生成静音音频
+        silence_args = [
+            "-f", "lavfi",
+            "-i", f"anullsrc=r=44100:cl=stereo",
+            "-t", str(silence_duration),
+            "-c:a", "libmp3lame",
+            "-q:a", "2"
+        ]
+        silence_file = await execute_ffmpeg(audio_path, silence_args, ".mp3")
+        
+        # 使用 filter_complex 拼接静音和原音频
+        concat_args = [
+            "-i", silence_file,
+            "-i", audio_path,
+            "-filter_complex",
+            "[0:a][1:a]concat=n=2:v=0:a=1[outa]",
+            "-map", "[outa]",
+            "-c:a", "libmp3lame",
+            "-q:a", "2"
+        ]
+        audio_with_silence = await execute_ffmpeg("concat_audio", concat_args, ".mp3")
+        # 更新音频路径用于后续合成
+        audio_path = audio_with_silence
+        
+        # 更新音频时长
+        audio_duration = audio_duration + silence_duration
+        logger.info(f"[歌词视频] 已拼接 {silence_duration}s 静音音频，总时长: {audio_duration:.2f}s")
+    finally:
+        if os.path.exists(silence_file):
+            os.remove(silence_file)
+
     # 2. 提取字体名
     font_name = Path(font_path).stem
 
     # 3. 生成 ASS 字幕内容（卡拉 OK 逐字变色）
+    # 注意：歌词时间戳需要偏移 silence_duration 秒
+    lrc_lines_offset = [
+        {"time": line["time"] + silence_duration, "text": line["text"]}
+        for line in lrc_lines
+    ]
     ass_content = _lrc_to_ass(
-        lrc_lines=lrc_lines,
+        lrc_lines=lrc_lines_offset,
         audio_duration=audio_duration,
         font_name=font_name,
         font_size=font_size,
@@ -758,6 +884,10 @@ async def generate_lyric_video(
         wrap_mode=wrap_mode,
         max_chars_per_line=max_chars_per_line,
         lines_mode=lines_mode,
+        cover_title=cover_title,
+        cover_subtitle=cover_subtitle,
+        cover_title_font_size=cover_title_font_size,
+        cover_subtitle_font_size=cover_subtitle_font_size,
     )
 
     # 4. 写入临时 ASS 文件
@@ -765,6 +895,12 @@ async def generate_lyric_video(
     with open(ass_file, 'w', encoding='utf-8') as f:
         f.write(ass_content)
     logger.info(f"[歌词视频] 已生成 ASS 字幕: {ass_file}")
+    # 输出封面相关的事件行，便于调试
+    cover_events = [line for line in ass_content.split('\n') if line.startswith('Dialogue:') and ('CoverTitle' in line or 'CoverSubtitle' in line)]
+    if cover_events:
+        logger.info(f"[歌词视频] 封面事件行: {cover_events}")
+    else:
+        logger.warning("[歌词视频] 未找到封面事件行！cover_title='%s', cover_subtitle='%s'", cover_title, cover_subtitle)
 
     # 5. 解析分辨率
     width, height = resolution.lower().split('x')
