@@ -1,5 +1,12 @@
 import ssl
 import os
+import logging
+
+# 配置日志级别
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 # 全局跳过 SSL 证书验证，解决某些环境下无法下载模型的问题
 ssl._create_default_https_context = ssl._create_unverified_context

@@ -492,14 +492,21 @@ def _lrc_to_ass(
     line_gap_ratio: float = 1.5,
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
+    lines_mode: str = "3",  # 新增：歌词行数模式，3=三行滚动，2=两行居中
 ) -> str:
     """
     将 LRC 歌词转换为 ASS 字幕，实现卡拉 OK 逐字变色效果。
 
-    三行滚动模式：
+    三行滚动模式（lines_mode="3"）：
       - 上一行（上方）：已唱完，显示已唱颜色，全行同时变色
       - 当前行（中间）：卡拉 OK 效果，未唱→已唱逐字变色
       - 下一行（下方）：未唱，显示未唱颜色（更淡）
+
+    两行居中模式（lines_mode="2"）：
+      - 第一行（上方）：当前歌词，卡拉 OK 效果
+      - 第二行（下方）：下一句歌词，静态显示
+      - 两行相同大小和颜色，无灰色
+      - 当前行唱完消失，两行同时上移，显示下一句
     """
     def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
         """#RRGGBB → ASS &HAABBGGRR"""
@@ -512,11 +519,11 @@ def _lrc_to_ass(
     cy = height // 2
 
     # ASS 颜色值（ASS格式：&HAABBGGRR，alpha=00表示完全不透明）
-    sung_ass   = hex_to_ass_color(sung_color,   "00")  # 已唱颜色（红色）
-    unsung_ass = hex_to_ass_color(unsung_color, "00")  # 未唱颜色（白色）
+    sung_ass   = hex_to_ass_color(sung_color,   "00")  # 已唱颜色
+    unsung_ass = hex_to_ass_color(unsung_color, "00")  # 未唱颜色
     outline_ass = hex_to_ass_color(stroke_color, "00")  # 描边颜色
 
-    # 上下行使用灰色（#aaaaaa），表示次要信息
+    # 三行模式：上下行使用灰色
     gray_ass = hex_to_ass_color("#aaaaaa", "00")
     dim_outline_ass = hex_to_ass_color(stroke_color, "00")
 
@@ -532,6 +539,26 @@ def _lrc_to_ass(
     fade_out_ms = 150
     dim_fade_ms = 250
 
+    # 根据行数模式选择样式配置
+    if lines_mode == "2":
+        # 两行居中模式：上下行使用相同颜色
+        top_ass = sung_ass   # 第一行（当前）：卡拉OK效果
+        bottom_ass = sung_ass  # 第二行（下一句）：和第一行相同颜色
+        dim_ass = sung_ass
+        # 两行使用相同字号
+        top_size = font_size
+        bottom_size = font_size
+        dim_outline = outline_ass
+    else:
+        # 三行滚动模式：上下行使用灰色
+        top_ass = sung_ass
+        bottom_ass = unsung_ass
+        dim_ass = gray_ass
+        # 上下行字号为当前行的 68%
+        top_size = dim_size
+        bottom_size = dim_size
+        dim_outline = dim_outline_ass
+
     # ASS 基础样式（Default 用于当前行卡拉 OK，Dim 用于上下行）
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -544,6 +571,8 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,{font_name},{font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
 Style: Dim,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
 Style: Prev,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
+Style: Top2Line,{font_name},{top_size},{top_ass},{top_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
+Style: Bottom2Line,{font_name},{bottom_size},{bottom_ass},{bottom_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -592,16 +621,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         return "\\N".join(lines)
 
-    def build_prev_text(text: str) -> str:
-        """上一行：已唱颜色（使用 Prev 样式）"""
-        limit = calc_chars_per_line(dim_size)
+    def build_prev_text(text: str, style: str = "Prev") -> str:
+        """上一行：已唱颜色（使用 Prev 或 Top2Line 样式）"""
+        size = top_size if style == "Top2Line" else dim_size
+        limit = calc_chars_per_line(size)
         chunks = wrap_text(text, limit)
         result = "\\N".join([escape(c) for c in chunks])
         return result
 
-    def build_next_text(text: str) -> str:
-        """下一行：淡色未唱（使用 Dim 样式）"""
-        limit = calc_chars_per_line(dim_size)
+    def build_next_text(text: str, style: str = "Dim") -> str:
+        """下一行：淡色未唱（使用 Dim 或 Bottom2Line 样式）"""
+        size = bottom_size if style == "Bottom2Line" else dim_size
+        limit = calc_chars_per_line(size)
         chunks = wrap_text(text, limit)
         result = "\\N".join([escape(c) for c in chunks])
         return result
@@ -627,25 +658,44 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         s = _seconds_to_ass_time(start)
         e = _seconds_to_ass_time(end)
 
-        # — 当前行：卡拉 OK 效果（Layer=2）—
-        fade_in = 0 if i == 0 else anim_in_ms
-        curr_tag = f"{{\\an5\\pos({cx},{cy})\\fad({fade_in},{fade_out_ms})}}"
-        curr_text = build_karaoke_text(line["text"], line_duration)
-        events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}")
+        if lines_mode == "2":
+            # ========== 两行居中模式 ==========
+            # 两行都居中显示，使用相同颜色
+            # 第一行：当前歌词，卡拉 OK 效果
+            fade_in = 0 if i == 0 else anim_in_ms
+            top_tag = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in},{fade_out_ms})}}"
+            top_text = build_karaoke_text(line["text"], line_duration)
+            events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag}{top_text}")
 
-        # — 上一行：已唱颜色（Layer=1）—
-        if i > 0:
-            dim_fade_in = 0 if i == 1 else dim_fade_ms
-            prev_tag = f"{{\\an5\\pos({cx},{cy - line_gap})\\fad({dim_fade_in},0)}}"
-            prev_text = build_prev_text(lrc_lines[i - 1]["text"])
-            events.append(f"Dialogue: 1,{s},{e},Prev,,0,0,0,,{prev_tag}{prev_text}")
+            # 第二行：下一句歌词，静态显示（不唱）
+            if i + 1 < len(lrc_lines):
+                next_text_val = lrc_lines[i + 1]["text"]
+                # 下一句用 sung_color 颜色，不做卡拉 OK 效果
+                bottom_text_content = build_next_text(next_text_val, "Bottom2Line")
+                # 调整位置在第一行下方
+                bottom_tag = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad(0,0)}}"
+                events.append(f"Dialogue: 1,{s},{e},Bottom2Line,,0,0,0,,{bottom_tag}{bottom_text_content}")
+        else:
+            # ========== 三行滚动模式 ==========
+            # — 当前行：卡拉 OK 效果（Layer=2）—
+            fade_in = 0 if i == 0 else anim_in_ms
+            curr_tag = f"{{\\an5\\pos({cx},{cy})\\fad({fade_in},{fade_out_ms})}}"
+            curr_text = build_karaoke_text(line["text"], line_duration)
+            events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}")
 
-        # — 下一行：淡色未唱（Layer=0）—
-        if i + 1 < len(lrc_lines):
-            next_fade_in = 0 if i == 0 else dim_fade_ms
-            next_tag = f"{{\\an5\\pos({cx},{cy + line_gap})\\fad({next_fade_in},0)}}"
-            next_text = build_next_text(lrc_lines[i + 1]["text"])
-            events.append(f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{next_tag}{next_text}")
+            # — 上一行：已唱颜色（Layer=1）—
+            if i > 0:
+                dim_fade_in = 0 if i == 1 else dim_fade_ms
+                prev_tag = f"{{\\an5\\pos({cx},{cy - line_gap})\\fad({dim_fade_in},0)}}"
+                prev_text = build_prev_text(lrc_lines[i - 1]["text"], "Prev")
+                events.append(f"Dialogue: 1,{s},{e},Prev,,0,0,0,,{prev_tag}{prev_text}")
+
+            # — 下一行：淡色未唱（Layer=0）—
+            if i + 1 < len(lrc_lines):
+                next_fade_in = 0 if i == 0 else dim_fade_ms
+                next_tag = f"{{\\an5\\pos({cx},{cy + line_gap})\\fad({next_fade_in},0)}}"
+                next_text = build_next_text(lrc_lines[i + 1]["text"], "Dim")
+                events.append(f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{next_tag}{next_text}")
 
     return header + "\n".join(events) + "\n"
 
@@ -668,6 +718,7 @@ async def generate_lyric_video(
     wrap_mode: str = "auto",
     max_chars_per_line: int = 11,
     background_mode: str = "video",
+    lines_mode: str = "3",  # 新增：歌词行数模式，3=三行滚动，2=两行居中
 ) -> str:
     """
     使用 FFmpeg 将音频和解析后的 LRC 歌词合成为带字幕的 MP4 视频。
@@ -679,7 +730,7 @@ async def generate_lyric_video(
 
     返回临时输出 mp4 文件路径
     """
-    logger.info(f"[歌词视频] 开始合成，音频: {audio_path}, 歌词行数: {len(lrc_lines)}, 分辨率: {resolution}")
+    logger.info(f"[歌词视频] 开始合成，音频: {audio_path}, 歌词行数: {len(lrc_lines)}, 分辨率: {resolution}, 行数模式: {lines_mode}")
 
     # 1. 获取音频时长
     probe_data = await execute_ffprobe(audio_path)
@@ -706,6 +757,7 @@ async def generate_lyric_video(
         line_gap_ratio=line_gap_ratio,
         wrap_mode=wrap_mode,
         max_chars_per_line=max_chars_per_line,
+        lines_mode=lines_mode,
     )
 
     # 4. 写入临时 ASS 文件

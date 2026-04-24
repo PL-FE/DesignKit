@@ -33,11 +33,14 @@ async def generate_o3ic_video_endpoint(
     line_gap_ratio: float = Form(1.5, description="行间距倍数（相对于 font_size）"),
     wrap_mode: str = Form("auto", description="换行模式：auto 或 chars"),
     max_chars_per_line: int = Form(11, description="手动换行时每行最大字符数"),
+    lines_mode: str = Form("3", description="歌词行数模式：3=三行滚动，2=两行居中"),
 ):
     """
     歌词视频合成接口。
     上传音频 + LRC 歌词，生成带卡拉 OK 逐字变色效果的 MP4 视频。
     """
+    logger.info(f"[歌词视频] 收到请求，lines_mode={lines_mode}")
+
     # 参数校验
     if not any(resolution.lower() == r for r in ["1280x720", "1920x1080", "720x1280", "1080x1920"]):
         parts = resolution.lower().split("x")
@@ -94,6 +97,7 @@ async def generate_o3ic_video_endpoint(
             line_gap_ratio=line_gap_ratio,
             wrap_mode=wrap_mode,
             max_chars_per_line=max_chars_per_line,
+            lines_mode=lines_mode,
         )
 
         # 输出文件名
