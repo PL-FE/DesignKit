@@ -77,11 +77,20 @@ async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str, time
         try:
             # 增加超时控制
             _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.error(f"ffmpeg 执行超时（超过 {timeout} 秒）: {input_path}")
-            raise RuntimeError(f"媒体处理超时（限时 {timeout} 秒）")
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+            
+            if isinstance(e, asyncio.TimeoutError):
+                logger.error(f"ffmpeg 执行超时（超过 {timeout} 秒）: {input_path}")
+                raise RuntimeError(f"媒体处理超时（限时 {timeout} 秒）")
+            else:
+                logger.info(f"ffmpeg 任务被取消: {input_path}")
+                raise
 
         if process.returncode != 0:
             err_msg = stderr.decode()
@@ -170,15 +179,33 @@ def _build_dimmed_cover_filter(width: str, height: str, escaped_ass: str, escape
     )
 
 
+def _darken_hex_color(hex_color: str, factor: float = 0.06) -> str:
+    """Darken a hex color by factor (0-1), preserving hue for subtle ambient tint."""
+    h = hex_color.replace("0x", "").replace("#", "")
+    r = int(int(h[0:2], 16) * factor)
+    g = int(int(h[2:4], 16) * factor)
+    b = int(int(h[4:6], 16) * factor)
+    return f"0x{r:02x}{g:02x}{b:02x}"
+
+
 def _build_glow_background_source(width: str, height: str, ffmpeg_bg_color: str) -> str:
-    base = ffmpeg_bg_color.replace("0x", "")
+    """Tech-themed dynamic glow background — optimized for speed with large, heavily blurred orbs."""
+    dark_base = _darken_hex_color(ffmpeg_bg_color)
     return (
-        f"color=c=0x{base}:size={width}x{height}:rate=20,"
+        f"color=c={dark_base}:size={width}x{height}:rate=12,"
         f"format=rgba,"
-        f"drawbox=x='iw*0.18+sin(t*0.55)*iw*0.12':y='ih*0.20+cos(t*0.43)*ih*0.10':w='iw*0.30':h='ih*0.30':color=0xff6b6b@0.20:t=fill,"
-        f"drawbox=x='iw*0.56+cos(t*0.37)*iw*0.11':y='ih*0.22+sin(t*0.61)*ih*0.10':w='iw*0.24':h='ih*0.24':color=0x7c4dff@0.18:t=fill,"
-        f"drawbox=x='iw*0.34+cos(t*0.29)*iw*0.14':y='ih*0.58+sin(t*0.48)*ih*0.10':w='iw*0.34':h='ih*0.34':color=0x4dd0e1@0.16:t=fill,"
-        f"gblur=sigma=70:steps=2,"
+        # Orb 1: Cyan, slow drift, top-left
+        f"drawbox=x='iw*0.10+sin(t*0.7)*iw*0.08':y='ih*0.12+cos(t*0.6)*ih*0.08':w='iw*0.40':h='ih*0.40':color=0x00e5ff@0.16:t=fill,"
+        # Orb 2: Magenta, wide orbit, center-right
+        f"drawbox=x='iw*0.48+cos(t*0.55)*iw*0.10':y='ih*0.30+sin(t*0.7)*ih*0.10':w='iw*0.38':h='ih*0.38':color=0xe040fb@0.14:t=fill,"
+        # Orb 3: Purple, bottom-center
+        f"drawbox=x='iw*0.22+cos(t*0.8)*iw*0.12':y='ih*0.48+sin(t*0.45)*ih*0.08':w='iw*0.42':h='ih*0.42':color=0x7c4dff@0.13:t=fill,"
+        # Orb 4: Electric blue, fast cross-motion, top-right
+        f"drawbox=x='iw*0.55+cos(t*1.0)*iw*0.08':y='ih*0.10+sin(t*0.9)*ih*0.08':w='iw*0.28':h='ih*0.28':color=0x448aff@0.15:t=fill,"
+        # Orb 5: Teal accent, bottom-left
+        f"drawbox=x='iw*0.05+sin(t*0.4)*iw*0.10':y='ih*0.55+cos(t*0.65)*ih*0.08':w='iw*0.36':h='ih*0.36':color=0x1de9b6@0.12:t=fill,"
+        # Heavy Gaussian blur for bokeh glow
+        f"gblur=sigma=48:steps=2,"
         f"format=yuv420p"
     )
 
@@ -376,11 +403,20 @@ async def separate_vocals(input_path: str) -> str:
         try:
             # 增加 300 秒超时控制
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.error("demucs 执行超时（超过 300 秒）")
-            raise RuntimeError("人声分离超时（限时 300 秒），请尝试较短的音频")
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+            
+            if isinstance(e, asyncio.TimeoutError):
+                logger.error("demucs 执行超时（超过 300 秒）")
+                raise RuntimeError("人声分离超时（限时 300 秒），请尝试较短的音频")
+            else:
+                logger.info("demucs 任务被取消")
+                raise
 
         if process.returncode != 0:
             err_output = stderr.decode()
@@ -419,49 +455,91 @@ async def separate_vocals(input_path: str) -> str:
 def parse_lrc(lrc_content: str) -> list[dict]:
     """
     解析 LRC 格式歌词文件，返回时间戳和歌词对的列表。
-    支持标准格式：[mm:ss.xx] 歌词文字
+    支持两种格式：
+      1. 标准格式：[mm:ss.xx] 歌词文字
+      2. 逐字格式：[mm:ss.xx]字[mm:ss.xx]字…（每个字单独时间标签）
     返回: [{"time": float（秒）, "text": str}]
     """
     import re
 
     lines = []
-    # 匹配标准 LRC 时间标签
-    time_pattern = re.compile(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\](.*)$')
 
     for raw_line in lrc_content.splitlines():
         raw_line = raw_line.strip()
-        # 同一行可能有多个时间标签（如 [00:01.00][00:30.00]歌词）
+        if not raw_line:
+            continue
         tags = re.findall(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\]', raw_line)
         if not tags:
             continue
-        # 提取歌词文本（最后一个时间标签后面的所有内容）
-        text = re.sub(r'\[\d{1,3}:\d{2}\.\d{1,3}\]', '', raw_line).strip()
-        if not text:
-            continue
-        for m, s, cs in tags:
-            minutes = int(m)
-            seconds = int(s)
-            centiseconds_str = cs.ljust(3, '0')[:3]  # 统一为3位毫秒
-            milliseconds = int(centiseconds_str)
-            total_seconds = minutes * 60 + seconds + milliseconds / 1000.0
-            lines.append({"time": total_seconds, "text": text})
+
+        # 检测是否为增强型 LRC (<time> 标签)
+        enhanced_tags = re.findall(r'<(\d{1,3}):(\d{2})\.(\d{1,3})>', raw_line)
+
+        if enhanced_tags:
+            # 增强型格式：提取纯文本和所有时间戳
+            full_text = re.sub(r'\[.*?\]|<.*?>', '', raw_line)
+            char_times = []
+            for m, s, cs in enhanced_tags:
+                total_seconds = int(m) * 60 + int(s) + int(cs.ljust(3, '0')[:3]) / 1000.0
+                char_times.append(total_seconds)
+            
+            if not full_text:
+                continue
+                
+            for _m, _s, _cs in tags:
+                lines.append({
+                    "time": char_times[0],
+                    "text": full_text,
+                    "char_times": char_times,
+                })
+        else:
+            plain_text = re.sub(r'\[\d{1,3}:\d{2}\.\d{1,3}\]', '', raw_line).strip()
+            if not plain_text:
+                continue
+
+            # 检测逐字LRC：标签数量接近文本长度（>=60%），说明每个字都有独立的[time]标签
+            is_per_char = len(tags) >= len(plain_text) * 0.6
+
+            if is_per_char:
+                # 逐字格式：提取每个 (时间标签, 紧跟文字) 对
+                pairs = re.findall(r'\[(\d{1,3}):(\d{2})\.(\d{1,3})\]([^\[]*)', raw_line)
+                chars: list[str] = []
+                char_times: list[float] = []
+                for m, s, cs, ch in pairs:
+                    ch = ch.strip()
+                    if ch:
+                        chars.append(ch)
+                        total_seconds = int(m) * 60 + int(s) + int(cs.ljust(3, '0')[:3]) / 1000.0
+                        char_times.append(total_seconds)
+                if not chars:
+                    continue
+                full_text = ''.join(chars)
+                lines.append({
+                    "time": char_times[0],
+                    "text": full_text,
+                    "char_times": char_times,
+                })
+            else:
+                # 标准格式：多个时间标签共享同一行歌词
+                for m, s, cs in tags:
+                    minutes = int(m)
+                    seconds = int(s)
+                    centiseconds_str = cs.ljust(3, '0')[:3]
+                    milliseconds = int(centiseconds_str)
+                    total_seconds = minutes * 60 + seconds + milliseconds / 1000.0
+                    lines.append({"time": total_seconds, "text": plain_text})
 
     # 按时间排序
     lines.sort(key=lambda x: x["time"])
-    
+
     # 过滤相同时间的歌词
-    # 最早时间组（通常为 00:00 元数据块）保留第一行（歌名），其余丢弃
-    # 其他同时间组保留最后一行（防止重影）
     unique_lines = []
     first_group_time = lines[0]["time"] if lines else None
     for line in lines:
         if unique_lines and abs(line["time"] - unique_lines[-1]["time"]) < 0.1:
-            # 同一时间组
             if first_group_time is not None and abs(line["time"] - first_group_time) < 0.1:
-                # 还在最早时间组内，跳过后续行（只保留第一行歌名）
                 continue
             else:
-                # 其他同时间组，替换为最后一行
                 unique_lines[-1] = line
         else:
             unique_lines.append(line)
@@ -536,8 +614,9 @@ def _lrc_to_ass(
     dim_size = max(36, int(font_size * 0.68))
     dim_stroke = max(1, stroke_width - 1)
 
-    # 行间距
-    line_gap = int(font_size * line_gap_ratio)
+    # 行间距计算
+    sentence_gap = int(font_size * line_gap_ratio)
+    margin_lr = int(width * 0.03)
 
     # 淡入淡出时长（毫秒）
     anim_in_ms = 300
@@ -565,6 +644,7 @@ def _lrc_to_ass(
         dim_outline = dim_outline_ass
 
     # ASS 基础样式（Default 用于当前行卡拉 OK，Dim 用于上下行，CoverTitle/CoverSubtitle 用于封面文字）
+    # 注意: MarginL 和 MarginR 必须设置以启用 ASS 原生智能自动换行！
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -573,13 +653,13 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
-Style: Dim,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
-Style: Prev,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,0,0,0,1
-Style: Top2Line,{font_name},{top_size},{top_ass},{top_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
-Style: Bottom2Line,{font_name},{bottom_size},{bottom_ass},{bottom_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,0,0,0,1
-Style: CoverTitle,{font_name},{cover_title_font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
-Style: CoverSubtitle,{font_name},{cover_subtitle_font_size},{unsung_ass},{unsung_ass},{outline_ass},&H80000000,0,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,0,0,0,1
+Style: Default,{font_name},{font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,{margin_lr},{margin_lr},0,1
+Style: Dim,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,{margin_lr},{margin_lr},0,1
+Style: Prev,{font_name},{dim_size},{gray_ass},{gray_ass},{dim_outline_ass},&H80000000,0,0,0,0,100,100,0,0,1,{dim_stroke},2,5,{margin_lr},{margin_lr},0,1
+Style: Top2Line,{font_name},{top_size},{top_ass},{top_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,{margin_lr},{margin_lr},0,1
+Style: Bottom2Line,{font_name},{bottom_size},{bottom_ass},{bottom_ass},{dim_outline},&H80000000,-1,0,0,0,100,100,0,0,1,{stroke_width},2,5,{margin_lr},{margin_lr},0,1
+Style: CoverTitle,{font_name},{cover_title_font_size},{sung_ass},{unsung_ass},{outline_ass},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,{margin_lr},{margin_lr},0,1
+Style: CoverSubtitle,{font_name},{cover_subtitle_font_size},{unsung_ass},{unsung_ass},{outline_ass},&H80000000,0,0,0,0,100,100,{letter_spacing},0,1,{stroke_width},2,5,{margin_lr},{margin_lr},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -589,108 +669,75 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         """转义 ASS 特殊字符"""
         return text.replace("\\", "\\\\").replace("{", "\\{")
 
-    def wrap_text(text: str, limit: int) -> list[str]:
-        """按字符数换行，返回行列表"""
-        if len(text) <= limit:
-            return [text]
-        return [text[i:i+limit] for i in range(0, len(text), limit)]
+    def build_karaoke_text(text: str, line_start: float, line_end: float, char_times: list[float] | None = None) -> str:
+        if not text: return ""
+        k_cs = []
+        total_chars = len(text)
+        if char_times and len(char_times) >= total_chars:
+            for j in range(total_chars):
+                c_start = char_times[j]
+                c_end = char_times[j+1] if j+1 < len(char_times) else line_end
+                k_cs.append(max(1, int(round((c_end - c_start) * 100))))
+        else:
+            total_cs = int(round((line_end - line_start) * 100))
+            if total_chars > 0:
+                per_char_cs = max(1, total_cs // total_chars)
+                k_cs = [per_char_cs] * total_chars
+                k_cs[-1] += (total_cs - sum(k_cs))
+        
+        segment = ""
+        char_count = 0
+        limit = max_chars_per_line if max_chars_per_line > 0 else 11
+        for j, ch in enumerate(text):
+            if wrap_mode == "chars" and char_count >= limit:
+                segment += "\\N"
+                char_count = 0
+            segment += f"{{\\kf{k_cs[j]}}}{escape(ch)}"
+            char_count += 1
+        return segment
 
-    def calc_chars_per_line(f_size: int) -> int:
-        """根据字号和视频宽度计算每行字符数"""
+    def format_plain_text(text: str) -> str:
         if wrap_mode == "chars":
-            return max_chars_per_line
-        usable_width = width * 0.94
-        return max(5, int(usable_width / f_size))
-
-    def build_karaoke_text(text: str, line_duration: float) -> str:
-        """
-        构建卡拉 OK 逐字变色文本。
-        ASS 卡拉OK语法: \\kf{时长} 实现从左到右填充效果。
-        PrimaryColour 为已唱颜色，SecondaryColour 为未唱颜色。
-        """
-        limit = calc_chars_per_line(font_size)
-        chunks = wrap_text(text, limit)
-        total_chars = sum(len(c) for c in chunks)
-
-        if total_chars == 0:
-            return escape(text)
-
-        total_cs = int(round(line_duration * 100))
-        per_char_cs = max(1, total_cs // total_chars)
-
-        lines: list[str] = []
-        for chunk in chunks:
-            segment = ""
-            for ch in chunk:
-                # \\kf 从左到右填充效果（而不是 \\k 整字变色）
-                segment += f"{{\\kf{per_char_cs}}}{escape(ch)}"
-            lines.append(segment)
-
-        return "\\N".join(lines)
-
-    def build_prev_text(text: str, style: str = "Prev") -> str:
-        """上一行：已唱颜色（使用 Prev 或 Top2Line 样式）"""
-        size = top_size if style == "Top2Line" else dim_size
-        limit = calc_chars_per_line(size)
-        chunks = wrap_text(text, limit)
-        result = "\\N".join([escape(c) for c in chunks])
-        return result
-
-    def build_next_text(text: str, style: str = "Dim") -> str:
-        """下一行：淡色未唱（使用 Dim 或 Bottom2Line 样式）"""
-        size = bottom_size if style == "Bottom2Line" else dim_size
-        limit = calc_chars_per_line(size)
-        chunks = wrap_text(text, limit)
-        result = "\\N".join([escape(c) for c in chunks])
-        return result
+            limit = max_chars_per_line if max_chars_per_line > 0 else 11
+            res = ""
+            char_count = 0
+            for i, ch in enumerate(text):
+                if char_count >= limit:
+                    res += "\\N"
+                    char_count = 0
+                res += escape(ch)
+                char_count += 1
+            return res
+        return escape(text)
 
     events: list[str] = []
 
     # 封面文字帧（自定义标题和副标题，显示在歌词之前）
     if cover_title or cover_subtitle:
         logger.info(f"[ASS字幕] 生成封面文字: title='{cover_title}', subtitle='{cover_subtitle}'")
-        # 封面显示时长：取第一行歌词开始时间（如果有），或固定 3 秒
         first_lyric_time = lrc_lines[0]["time"] if lrc_lines and len(lrc_lines) > 0 else 3.0
-        # 封面至少显示 2 秒，最多显示 5 秒
         cover_duration = max(2.0, min(first_lyric_time, 5.0))
         cover_end_time = cover_duration
-        logger.info(f"[ASS字幕] 封面时长: {cover_end_time}s, 第一句歌词时间: {first_lyric_time}s")
         
         cover_start = _seconds_to_ass_time(0.0)
         cover_end = _seconds_to_ass_time(cover_end_time)
         
-        # 封面标题（居中上方）
         if cover_title:
             title_y = cy - int(cover_title_font_size * 0.8) if cover_subtitle else cy
             title_tag = f"{{\\an5\\pos({cx},{title_y})\\fad(0,500)}}"
-            # 根据换行模式处理标题
-            if wrap_mode == "chars":
-                limit = max_chars_per_line
-            else:
-                usable_width = width * 0.9
-                limit = max(5, int(usable_width / cover_title_font_size))
-            title_chunks = wrap_text(cover_title, limit)
-            title_display = "\\N".join([escape(c) for c in title_chunks])
+            title_display = format_plain_text(cover_title)
             events.append(f"Dialogue: 5,{cover_start},{cover_end},CoverTitle,,0,0,0,,{title_tag}{title_display}")
         
-        # 封面副标题（居中下方）
         if cover_subtitle:
             subtitle_y = cy + int(cover_title_font_size * 0.5) if cover_title else cy
             subtitle_tag = f"{{\\an5\\pos({cx},{subtitle_y})\\fad(0,500)}}"
-            # 根据换行模式处理副标题
-            if wrap_mode == "chars":
-                limit = max_chars_per_line
-            else:
-                usable_width = width * 0.9
-                limit = max(5, int(usable_width / cover_subtitle_font_size))
-            subtitle_chunks = wrap_text(cover_subtitle, limit)
-            subtitle_display = "\\N".join([escape(c) for c in subtitle_chunks])
+            subtitle_display = format_plain_text(cover_subtitle)
             events.append(f"Dialogue: 4,{cover_start},{cover_end},CoverSubtitle,,0,0,0,,{subtitle_tag}{subtitle_display}")
 
     # 主体歌词行
     for i, line in enumerate(lrc_lines):
         start = line["time"]
-        end = lrc_lines[i + 1]["time"] - 0.05 if i + 1 < len(lrc_lines) else audio_duration
+        end = lrc_lines[i + 1]["time"] if i + 1 < len(lrc_lines) else audio_duration
         if end <= start:
             end = start + 0.5
         line_duration = end - start
@@ -698,86 +745,60 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         s = _seconds_to_ass_time(start)
         e = _seconds_to_ass_time(end)
 
+        k_text = build_karaoke_text(line["text"], start, end, line.get("char_times", []))
+
         if lines_mode == "2":
-            # ========== 两行居中模式 ==========
-            # 每两行为一组，组内唱完才翻页
-            # 流程（以第1、2行为例）：
-            # 阶段A：第1行唱（上方，卡拉OK）+ 第2行预览（下方，未唱颜色）
-            # 阶段B：第2行唱（下方，卡拉OK）+ 第1行保持（上方，已唱颜色）
-            # 阶段C：第2行唱完，两行都消失，切换到第3、4行
-            #
-            # 每组的第一行（i=0,2,4...）创建本组的三个阶段
-
-            # 只处理组内第一行（偶数索引）
             if i % 2 == 0:
-                # 这是组内第一行（如第1、3、5行...）
-                next_i = i + 1  # 组内第二行
-
+                next_i = i + 1
                 if next_i < len(lrc_lines):
-                    # === 组内有两行 ===
                     next_line = lrc_lines[next_i]
                     next_start = next_line["time"]
-                    next_end = lrc_lines[next_i + 1]["time"] - 0.05 if next_i + 1 < len(lrc_lines) else audio_duration
+                    next_end = lrc_lines[next_i + 1]["time"] if next_i + 1 < len(lrc_lines) else audio_duration
                     if next_end <= next_start:
                         next_end = next_start + 0.5
-                    next_duration = next_end - next_start
-
-                    # 阶段A：第一行唱（上方卡拉OK）+ 第二行预览（下方未唱）
-                    # 第二行预览一直持续到它开始唱的时间点，避免间隙闪烁
-                    fade_in_a = 0 if i == 0 else anim_in_ms
-                    top_tag_a = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in_a},{fade_out_ms})}}"
-                    top_text_a = build_karaoke_text(line["text"], line_duration)
-                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag_a}{top_text_a}")
-
-                    # 第二行预览结束时间延续到它开始唱的时间，消除间隙
-                    bottom_end_a = _seconds_to_ass_time(next_start)
-                    bottom_tag_a = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad({anim_in_ms},0)}}"
-                    bottom_text_a = build_next_text(next_line["text"], "Bottom2Line")
-                    events.append(f"Dialogue: 0,{s},{bottom_end_a},Bottom2Line,,0,0,0,,{bottom_tag_a}{bottom_text_a}")
-
-                    # 阶段B：第二行唱（下方卡拉OK）+ 第一行保持（上方已唱颜色）
+                    
+                    k_text_next = build_karaoke_text(next_line["text"], next_start, next_end, next_line.get("char_times", []))
+                    
                     ns = _seconds_to_ass_time(next_start)
                     ne = _seconds_to_ass_time(next_end)
-
-                    # 上方第一行保持（已唱颜色）
-                    # 从第一行结束时间开始（而非第二行开始时间），避免间隙闪烁
-                    top_tag_b = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad(0,0)}}"
-                    top_text_b = build_next_text(line["text"], "Top2Line")
-                    events.append(f"Dialogue: 1,{e},{ne},Top2Line,,0,0,0,,{top_tag_b}{top_text_b}")
-
-                    # 下方第二行开始唱（卡拉OK效果），去掉淡入避免闪烁
-                    bottom_tag_b = f"{{\\an5\\pos({cx},{cy + line_gap // 2})\\fad(0,0)}}"
-                    bottom_text_b = build_karaoke_text(next_line["text"], next_duration)
-                    events.append(f"Dialogue: 2,{ns},{ne},Default,,0,0,0,,{bottom_tag_b}{bottom_text_b}")
+                    
+                    plain_curr = format_plain_text(line["text"])
+                    plain_next = format_plain_text(next_line["text"])
+                    
+                    y_top = cy - sentence_gap // 2
+                    y_bot = cy + sentence_gap // 2
+                    
+                    tag_top_a = f"{{\\an5\\pos({cx},{y_top})\\fad({anim_in_ms if i>0 else 0},0)}}"
+                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{tag_top_a}{k_text}")
+                    
+                    tag_bot_a = f"{{\\an5\\pos({cx},{y_bot})\\fad({anim_in_ms},0)}}"
+                    events.append(f"Dialogue: 0,{s},{ns},Bottom2Line,,0,0,0,,{tag_bot_a}{plain_next}")
+                    
+                    tag_top_b = f"{{\\an5\\pos({cx},{y_top})\\fad(0,0)}}"
+                    events.append(f"Dialogue: 1,{e},{ne},Top2Line,,0,0,0,,{tag_top_b}{plain_curr}")
+                    
+                    tag_bot_b = f"{{\\an5\\pos({cx},{y_bot})\\fad(0,0)}}"
+                    events.append(f"Dialogue: 2,{ns},{ne},Default,,0,0,0,,{tag_bot_b}{k_text_next}")
                 else:
-                    # === 组内只有一行（最后一行）===
-                    fade_in = 0 if i == 0 else anim_in_ms
-                    top_tag = f"{{\\an5\\pos({cx},{cy - line_gap // 2})\\fad({fade_in},{fade_out_ms})}}"
-                    top_text = build_karaoke_text(line["text"], line_duration)
-                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{top_tag}{top_text}")
+                    tag = f"{{\\an5\\pos({cx},{cy - sentence_gap // 2})\\fad({anim_in_ms if i>0 else 0},{fade_out_ms})}}"
+                    events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{tag}{k_text}")
         else:
-            # ========== 三行滚动模式 ==========
-            # — 当前行：卡拉 OK 效果（Layer=2）—
-            fade_in = 0 if i == 0 else anim_in_ms
-            curr_tag = f"{{\\an5\\pos({cx},{cy})\\fad({fade_in},{fade_out_ms})}}"
-            curr_text = build_karaoke_text(line["text"], line_duration)
-            events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{curr_tag}{curr_text}")
-
-            # — 上一行：已唱颜色（Layer=1）—
+            tag = f"{{\\an5\\pos({cx},{cy})\\fad({anim_in_ms if i>0 else 0},{fade_out_ms})}}"
+            events.append(f"Dialogue: 2,{s},{e},Default,,0,0,0,,{tag}{k_text}")
+            
             if i > 0:
-                dim_fade_in = 0 if i == 1 else dim_fade_ms
-                prev_tag = f"{{\\an5\\pos({cx},{cy - line_gap})\\fad({dim_fade_in},0)}}"
-                prev_text = build_prev_text(lrc_lines[i - 1]["text"], "Prev")
-                events.append(f"Dialogue: 1,{s},{e},Prev,,0,0,0,,{prev_tag}{prev_text}")
-
-            # — 下一行：淡色未唱（Layer=0）—
+                plain_prev = format_plain_text(lrc_lines[i-1]["text"])
+                tag_prev = f"{{\\an5\\pos({cx},{cy - sentence_gap})\\fad({dim_fade_ms if i>1 else 0},0)}}"
+                events.append(f"Dialogue: 1,{s},{e},Prev,,0,0,0,,{tag_prev}{plain_prev}")
+                
             if i + 1 < len(lrc_lines):
-                next_fade_in = 0 if i == 0 else dim_fade_ms
-                next_tag = f"{{\\an5\\pos({cx},{cy + line_gap})\\fad({next_fade_in},0)}}"
-                next_text = build_next_text(lrc_lines[i + 1]["text"], "Dim")
-                events.append(f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{next_tag}{next_text}")
+                plain_next = format_plain_text(lrc_lines[i+1]["text"])
+                tag_next = f"{{\\an5\\pos({cx},{cy + sentence_gap})\\fad({dim_fade_ms if i>0 else 0},0)}}"
+                events.append(f"Dialogue: 0,{s},{e},Dim,,0,0,0,,{tag_next}{plain_next}")
 
     return header + "\n".join(events) + "\n"
+
+
 
 
 
@@ -865,10 +886,13 @@ async def generate_lyric_video(
 
     # 3. 生成 ASS 字幕内容（卡拉 OK 逐字变色）
     # 注意：歌词时间戳需要偏移 silence_duration 秒
-    lrc_lines_offset = [
-        {"time": line["time"] + silence_duration, "text": line["text"]}
-        for line in lrc_lines
-    ]
+    lrc_lines_offset = []
+    for line in lrc_lines:
+        new_line = line.copy()
+        new_line["time"] += silence_duration
+        if "char_times" in line:
+            new_line["char_times"] = [t + silence_duration for t in line["char_times"]]
+        lrc_lines_offset.append(new_line)
     ass_content = _lrc_to_ass(
         lrc_lines=lrc_lines_offset,
         audio_duration=audio_duration,
@@ -993,19 +1017,22 @@ async def generate_lyric_video(
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
+                "-movflags", "+faststart",
             ]
         elif normalized_background_mode == "color":
-            vf = _build_solid_background_filter(escaped_ass, escaped_fontsdir)
+            glow_bg = _build_glow_background_source(width, height, ffmpeg_bg_color)
+            vf = _build_glow_background_filter(escaped_ass, escaped_fontsdir)
 
             args = [
                 "-f", "lavfi",
-                "-i", f"color=c={ffmpeg_bg_color}:size={width}x{height}:rate=20",
+                "-i", glow_bg,
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-tune", "stillimage", "-threads", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "2",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
+                "-movflags", "+faststart",
             ]
         else:
             glow_background = _build_glow_background_source(width, height, ffmpeg_bg_color)
@@ -1020,6 +1047,7 @@ async def generate_lyric_video(
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
+                "-movflags", "+faststart",
             ]
 
         result_path = await execute_ffmpeg(audio_path, args, ".mp4", timeout=300)

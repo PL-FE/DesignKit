@@ -264,6 +264,16 @@ async def lyric_video_generate_endpoint(
     return JSONResponse({"task_id": task_info.task_id, "status": task_info.status.value})
 
 
+@router.post("/lyric-video/task/{task_id}/cancel")
+async def lyric_video_task_cancel(task_id: str):
+    """
+    取消正在运行的任务。
+    """
+    from services.task_manager import cancel_task
+    success = cancel_task(task_id)
+    return JSONResponse({"success": success, "message": "任务已取消" if success else "任务未在运行或不存在"})
+
+
 @router.get("/lyric-video/task/{task_id}")
 async def lyric_video_task_status(task_id: str):
     """

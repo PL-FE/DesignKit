@@ -11,7 +11,7 @@ import logging
 import uuid
 import threading
 from enum import Enum
-from typing import Any, Callable, Awaitable, Optional
+from typing import Any, Callable, Awaitable, Optional, Dict
 from pathlib import Path
 import sqlite3
 
@@ -45,6 +45,10 @@ def _init_db() -> sqlite3.Connection:
 # 模块级连接（每个 worker 进程各自持有）
 _conn: Optional[sqlite3.Connection] = None
 _lock = threading.Lock()
+
+
+# 正在执行的任务引用（内存中）
+_active_tasks: Dict[str, asyncio.Task] = {}
 
 
 def _ensure_conn() -> sqlite3.Connection:
@@ -152,6 +156,18 @@ def remove_task(task_id: str) -> None:
     with _lock:
         conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         conn.commit()
+    # 同时也从活动任务中移除
+    _active_tasks.pop(task_id, None)
+
+
+def cancel_task(task_id: str) -> bool:
+    """尝试取消一个正在运行的任务。"""
+    task = _active_tasks.get(task_id)
+    if task:
+        logger.info(f"[TaskManager] 正在取消任务: {task_id}")
+        task.cancel()
+        return True
+    return False
 
 
 async def run_background(
@@ -164,13 +180,26 @@ async def run_background(
     coro_fn 需接受 task_info: TaskInfo 作为关键字参数。
     """
     task_info.status = TaskStatus.PROCESSING
+    
+    # 注册到活动任务列表
+    loop = asyncio.get_running_loop()
+    _active_tasks[task_info.task_id] = asyncio.current_task(loop)
+    
     try:
         await coro_fn(task_info=task_info, **kwargs)
+    except asyncio.CancelledError:
+        task_info.status = TaskStatus.FAILED
+        task_info.error = "任务已被用户取消"
+        task_info.finished_at = time.time()
+        logger.info(f"[TaskManager] 任务 {task_info.task_id} 已取消")
+        raise # 重新抛出以确保协程正常中止
     except Exception as e:
         task_info.status = TaskStatus.FAILED
         task_info.error = str(e)
         task_info.finished_at = time.time()
         logger.exception(f"[TaskManager] 任务 {task_info.task_id} 失败: {e}")
+    finally:
+        _active_tasks.pop(task_info.task_id, None)
 
 
 def cleanup_old_tasks(max_age: float = 3600) -> None:
