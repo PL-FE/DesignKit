@@ -96,9 +96,7 @@ COPY schemas.py .
 COPY routers/ ./routers/
 COPY services/ ./services/
 COPY entrypoint.sh .
-
-# 创建 assets 目录（运行时可通过 volume 挂载背景视频等资源）
-RUN mkdir -p assets/fonts
+COPY assets/ ./assets/
 
 RUN chmod +x entrypoint.sh
 
