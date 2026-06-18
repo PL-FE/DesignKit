@@ -56,27 +56,7 @@ RUN /opt/ODAFileConverter/ODAFileConverter --version 2>/dev/null \
 # ---------- 设置工作目录 ----------
 WORKDIR /app
 
-# ---------- 安装 Python 依赖（分层安装以利用缓存）----------
-
-# 第一步：安装不会频繁变动的重型依赖 (torch 相关)
-# 🚨 强制安装 CPU 版本 (附加 --extra-index-url)，防止下载巨大的 NVIDIA CUDA 驱动库撑爆服务器磁盘
-RUN pip3 install --no-cache-dir \
-    torch==2.9.1 \
-    torchaudio==2.9.1 \
-    torchvision==0.24.1 \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
-        
-RUN pip3 install --no-cache-dir demucs==4.0.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-
-# 第二步：预下载 Demucs AI 模型（关键：防止运行时重新下载）
-# 设置环境变量，指定模型存放路径，方便缓存
-ENV TORCH_HOME=/app/.cache/torch
-RUN python3 -c "from demucs.pretrained import get_model; get_model('htdemucs')"
-
-# 第三步：安装业务常规依赖
+# ---------- 安装 Python 依赖 ----------
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \

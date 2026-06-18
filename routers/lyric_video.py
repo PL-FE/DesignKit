@@ -14,7 +14,6 @@ from starlette.background import BackgroundTask
 from services.ffmpeg_service import (
     parse_lrc,
     generate_lyric_video,
-    separate_vocals,
 )
 from services.task_manager import (
     TaskStatus,
@@ -82,19 +81,11 @@ async def _do_generate(
     cover_subtitle_font_size: int,
     input_dir: str,
 ):
-    vocal_removed_path = None
     result_path = None
     try:
-        # 1. 如果开启去除人声，先使用 demucs 提取伴奏
+        # 直接使用原音频合成歌词视频
         actual_audio = audio_path
-        if remove_vocals:
-            task_info.progress = 5
-            logger.info("[歌词视频] 开始人声分离（demucs）...")
-            vocal_removed_path = await separate_vocals(audio_path)
-            actual_audio = vocal_removed_path
-            logger.info(f"[歌词视频] 人声分离完成: {vocal_removed_path}")
-
-        task_info.progress = 30 if remove_vocals else 10
+        task_info.progress = 10
 
         # 2. 合成歌词视频
         result_path = await generate_lyric_video(
@@ -148,8 +139,6 @@ async def _do_generate(
         task_info.error = str(e)
         task_info.finished_at = __import__("time").time()
         # 清理临时文件
-        if vocal_removed_path and os.path.exists(vocal_removed_path):
-            os.remove(vocal_removed_path)
         if result_path and os.path.exists(result_path):
             os.remove(result_path)
         shutil.rmtree(input_dir, ignore_errors=True)
@@ -191,6 +180,9 @@ async def lyric_video_generate_endpoint(
         int(w), int(h)
     except Exception:
         raise HTTPException(status_code=400, detail="无效的分辨率格式，应为 宽x高，如 1080x1920")
+
+    if remove_vocals:
+        raise HTTPException(status_code=400, detail="不再支持人声去除功能")
 
     # 验证字体大小范围
     if not (40 <= font_size <= 240):

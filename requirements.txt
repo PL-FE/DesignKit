@@ -20,7 +20,3 @@ uvloop==0.21.0
 watchfiles==1.0.4
 websockets==14.1
 six==1.17.0
-demucs==4.0.1
-torch==2.9.1
-torchaudio==2.9.1
-torchvision==0.24.1
