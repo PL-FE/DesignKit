@@ -203,10 +203,34 @@ async def run_background(
 
 
 def cleanup_old_tasks(max_age: float = 3600) -> None:
-    """清理超过 max_age 秒的已完成/失败任务"""
+    """清理超过 max_age 秒的已完成/失败任务，并清理其对应的磁盘文件"""
+    import os
+    import shutil
     now = time.time()
     conn = _ensure_conn()
     with _lock:
+        try:
+            # 1. 查找所有即将被删除的旧任务的结果文件路径
+            cursor = conn.execute(
+                "SELECT result_path FROM tasks WHERE finished_at IS NOT NULL AND (? - finished_at) > ?",
+                (now, max_age)
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                path = row["result_path"]
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                        # 尝试一并清理可能存在的父文件夹
+                        parent_dir = os.path.dirname(path)
+                        if os.path.exists(parent_dir) and ("ffmpeg_out_" in parent_dir or "lyric_video_in_" in parent_dir):
+                            shutil.rmtree(parent_dir, ignore_errors=True)
+                    except Exception as e:
+                        logger.error(f"[TaskManager] 清理过期文件 {path} 失败: {e}")
+        except Exception as e:
+            logger.error(f"[TaskManager] 查询过期任务失败: {e}")
+
+        # 2. 从数据库删除旧任务记录
         conn.execute(
             "DELETE FROM tasks WHERE finished_at IS NOT NULL AND (? - finished_at) > ?",
             (now, max_age),

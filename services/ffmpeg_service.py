@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 _LYRIC_BG_VIDEO_PATH = Path("/app/assets/123.mp4") if Path("/app/assets/123.mp4").exists() else Path(__file__).parent.parent / "assets" / "123.mp4"
 _LYRIC_BG_IMAGE_URL = "https://picsum.photos/200/300"
-_LYRIC_BG_IMAGE_INTERVAL = 10
+_LYRIC_BG_IMAGE_INTERVAL = 30
 
 async def execute_ffprobe(input_path: str) -> dict:
     """
@@ -112,9 +112,17 @@ async def execute_ffmpeg(input_path: str, args: list[str], output_ext: str, time
 
 
 async def _download_random_bg_images(audio_duration: float) -> tuple[str, list[str]]:
+    # 根据间隔计算所需要的图片轮播总数
     image_count = max(1, math.ceil(audio_duration / _LYRIC_BG_IMAGE_INTERVAL))
+    # 限制最多下载 4 张图片
+    download_count = min(image_count, 4)
+
     image_dir = tempfile.mkdtemp(prefix="lyric_bg_imgs_")
     image_paths: list[str] = []
+
+    # 本地备用图路径
+    local_image_dir = Path(__file__).parent.parent / "assets" / "images"
+    local_images = sorted(list(local_image_dir.glob("bg_*.png"))) if local_image_dir.exists() else []
 
     async def download_one(index: int) -> str:
         image_path = os.path.join(image_dir, f"bg_{index:03d}.jpg")
@@ -124,21 +132,31 @@ async def _download_random_bg_images(audio_duration: float) -> tuple[str, list[s
         )
 
         def _fetch() -> str:
-            with urllib.request.urlopen(request, timeout=15) as response, open(image_path, "wb") as f:
+            with urllib.request.urlopen(request, timeout=2) as response, open(image_path, "wb") as f:
                 shutil.copyfileobj(response, f)
             return image_path
 
-        return await asyncio.to_thread(_fetch)
+        try:
+            return await asyncio.to_thread(_fetch)
+        except Exception as e:
+            # 下载失败或超时，回退使用本地精美图片
+            logger.warning(f"[歌词视频] 下载背景图 {index} 失败，将回退使用本地内置背景图: {e}")
+            if local_images:
+                local_selected = random.choice(local_images)
+                shutil.copy2(local_selected, image_path)
+                return image_path
+            else:
+                raise
 
     try:
-        # 并发下载，限制最大并发数为 5
-        semaphore = asyncio.Semaphore(5)
+        # 并发下载，限制最大并发数为 4
+        semaphore = asyncio.Semaphore(4)
 
         async def limited_download(index: int) -> str:
             async with semaphore:
                 return await download_one(index)
 
-        results = await asyncio.gather(*[limited_download(i) for i in range(image_count)])
+        results = await asyncio.gather(*[limited_download(i) for i in range(download_count)])
         image_paths.extend(results)
         return image_dir, image_paths
     except Exception:
@@ -150,14 +168,21 @@ def _build_image_concat_file(image_paths: list[str], audio_duration: float) -> s
     concat_file = tempfile.mktemp(suffix=".txt")
     segment_duration = _LYRIC_BG_IMAGE_INTERVAL
 
+    # 计算总共需要轮播的图片张数
+    total_needed = max(1, math.ceil(audio_duration / segment_duration))
+
     with open(concat_file, "w", encoding="utf-8") as f:
-        for image_path in image_paths:
+        for i in range(total_needed):
+            # 循环复用已下载的图片
+            image_path = image_paths[i % len(image_paths)]
             escaped_path = image_path.replace("'", "'\\''").replace('\\', '/')
             f.write(f"file '{escaped_path}'\n")
             f.write(f"duration {segment_duration}\n")
 
-        last_image_path = image_paths[-1].replace("'", "'\\''").replace('\\', '/')
-        f.write(f"file '{last_image_path}'\n")
+        # FFmpeg concat 要求最后一行写一遍最后一张图（不写 duration）以结束
+        last_image_path = image_paths[(total_needed - 1) % len(image_paths)]
+        escaped_last = last_image_path.replace("'", "'\\''").replace('\\', '/')
+        f.write(f"file '{escaped_last}'\n")
 
     return concat_file
 
@@ -908,7 +933,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
@@ -922,7 +947,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
                 "-movflags", "+faststart",
@@ -937,7 +962,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
                 "-movflags", "+faststart",
@@ -952,7 +977,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
                 "-movflags", "+faststart",

@@ -38,12 +38,6 @@ _FONT_PATH = str(next((p for p in _FONT_CANDIDATES if p.exists()), _FONT_CANDIDA
 
 def _lyric_video_download_response(task_id: str, task_info: object) -> FileResponse:
     encoded_filename = urllib.parse.quote(task_info.result_filename)
-
-    def cleanup():
-        if task_info.result_path and os.path.exists(task_info.result_path):
-            os.remove(task_info.result_path)
-        remove_task(task_id)
-
     return FileResponse(
         path=task_info.result_path,
         filename=task_info.result_filename,
@@ -51,7 +45,6 @@ def _lyric_video_download_response(task_id: str, task_info: object) -> FileRespo
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
         },
-        background=BackgroundTask(cleanup),
     )
 
 
@@ -127,10 +120,6 @@ async def _do_generate(
         task_info.result_path = result_path
         task_info.result_filename = output_filename
         task_info.finished_at = __import__("time").time()
-        # status 必须最后设置：每次 __setattr__ 都会触发 _save_task，
-        # 如果先设 DONE 再设 result_path/result_filename，
-        # 轮询端可能在 status=DONE 但 result_filename=None 的窗口期
-        # 调用 urllib.parse.quote(None) 导致 TypeError → 500
         task_info.status = TaskStatus.DONE
         logger.info(f"[歌词视频] 合成完成: {output_filename}")
 
@@ -138,11 +127,13 @@ async def _do_generate(
         task_info.status = TaskStatus.FAILED
         task_info.error = str(e)
         task_info.finished_at = __import__("time").time()
-        # 清理临时文件
+        # 清理生成的目标临时文件
         if result_path and os.path.exists(result_path):
             os.remove(result_path)
-        shutil.rmtree(input_dir, ignore_errors=True)
         logger.error(f"[歌词视频] 合成失败: {str(e)}")
+    finally:
+        # 无论成功失败，都在最后清理上传音频的临时文件夹
+        shutil.rmtree(input_dir, ignore_errors=True)
 
 
 @router.post("/lyric-video/generate")
@@ -220,7 +211,7 @@ async def lyric_video_generate_endpoint(
     logger.info(f"[歌词视频] 解析到 {len(lrc_lines)} 行歌词")
 
     # 3. 创建异步任务（顺带清理过期任务）
-    cleanup_old_tasks()
+    await asyncio.to_thread(cleanup_old_tasks)
     task_info = create_task()
     logger.info(f"[歌词视频] 创建异步任务: {task_info.task_id}")
     logger.info(f"[歌词视频] 封面参数: title='{cover_title}', subtitle='{cover_subtitle}', title_font_size={cover_title_font_size}, subtitle_font_size={cover_subtitle_font_size}")
