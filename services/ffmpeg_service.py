@@ -933,7 +933,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
             ]
@@ -947,7 +947,7 @@ async def generate_lyric_video(
                 "-i", audio_path,
                 "-t", str(audio_duration),
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v", "-map", "1:a",
                 "-movflags", "+faststart",
